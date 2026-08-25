@@ -12,7 +12,7 @@
     <div class="header-actions"><button class="profile" id="profileButton" type="button"><span id="profileInitial">?</span><span class="profile-text"><b id="profileName">로그인</b><small id="profileHint">ID를 만들어 시작하세요</small></span></button></div>
   </header>
   <aside class="resource-index" aria-label="전자책 및 지역 도서관 바로가기">
-    <div class="resource-tab"><span>BOOK<br>LINKS</span><b>무료로 읽기</b></div>
+    <button class="resource-tab" id="resourceIndexToggle" type="button" aria-expanded="false" aria-label="전자책 및 도서관 인덱스 열기"><span>BOOK<br>LINKS</span><b>무료로 읽기</b></button>
     <div class="resource-panel">
       <div class="resource-head"><span>READ FREE</span><h2>무료 전자책</h2><p>공식 공개 자료를 새 창에서 확인하세요.</p></div>
       <nav class="ebook-links" aria-label="무료 전자책 사이트">
@@ -21,7 +21,7 @@
         <a href="https://www.gutenberg.org/" target="_blank" rel="noopener"><i>EN</i><span><b>Project Gutenberg</b><small>세계 고전 무료 원문</small></span><em>↗</em></a>
         <a href="https://standardebooks.org/ebooks" target="_blank" rel="noopener"><i>EN</i><span><b>Standard Ebooks</b><small>정교하게 편집된 고전</small></span><em>↗</em></a>
       </nav>
-      <div class="local-library"><span>MY LIBRARY</span><h3 id="nearbyLibraryName">우리 지역 도서관</h3><p id="nearbyLibraryHint">위치 동의 후 가까운 도서관 한 곳을 안내합니다.</p><button id="findLibraryButton" type="button"><span>◎</span> GPS로 가까운 도서관 찾기</button><a id="nearbyLibraryLink" href="https://lib.gumi.go.kr/" target="_blank" rel="noopener" hidden>도서관 홈페이지 열기 <b>↗</b></a><small>위치정보는 저장하거나 전송하지 않습니다.</small></div>
+      <div class="local-library"><span>MY LIBRARY</span><h3 id="nearbyLibraryName">우리 지역 도서관</h3><p id="nearbyLibraryHint">위치 동의 후 가까운 구미시립도서관을 안내합니다.</p><button id="findLibraryButton" type="button"><span>◎</span> GPS로 가까운 도서관 찾기</button><a id="nearbyLibraryLink" href="https://lib.gumi.go.kr/" target="_blank" rel="noopener">구미시립도서관 바로가기 <b>↗</b></a><small>GPS가 안 되어도 홈페이지는 바로 열 수 있습니다.</small></div>
     </div>
   </aside>
   <main>
