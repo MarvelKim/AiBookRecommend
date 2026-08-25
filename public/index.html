@@ -11,6 +11,19 @@
     <nav class="nav"><button class="active nav-trigger" data-view="curation">도서 추천</button><button class="nav-trigger" data-view="new-books">신간 도서</button><button class="nav-trigger" data-view="library">나의 서재 <em id="favoriteCount">0</em></button></nav>
     <div class="header-actions"><button class="profile" id="profileButton" type="button"><span id="profileInitial">?</span><span class="profile-text"><b id="profileName">로그인</b><small id="profileHint">ID를 만들어 시작하세요</small></span></button></div>
   </header>
+  <aside class="resource-index" aria-label="전자책 및 지역 도서관 바로가기">
+    <div class="resource-tab"><span>BOOK<br>LINKS</span><b>무료로 읽기</b></div>
+    <div class="resource-panel">
+      <div class="resource-head"><span>READ FREE</span><h2>무료 전자책</h2><p>공식 공개 자료를 새 창에서 확인하세요.</p></div>
+      <nav class="ebook-links" aria-label="무료 전자책 사이트">
+        <a href="https://db.itkc.or.kr/" target="_blank" rel="noopener"><i>KR</i><span><b>한국고전종합DB</b><small>고전 원문·번역서</small></span><em>↗</em></a>
+        <a href="https://gongu.copyright.or.kr/gongu/main/main.do" target="_blank" rel="noopener"><i>KR</i><span><b>공유마당</b><small>공유저작물 전자책</small></span><em>↗</em></a>
+        <a href="https://www.gutenberg.org/" target="_blank" rel="noopener"><i>EN</i><span><b>Project Gutenberg</b><small>세계 고전 무료 원문</small></span><em>↗</em></a>
+        <a href="https://standardebooks.org/ebooks" target="_blank" rel="noopener"><i>EN</i><span><b>Standard Ebooks</b><small>정교하게 편집된 고전</small></span><em>↗</em></a>
+      </nav>
+      <div class="local-library"><span>MY LIBRARY</span><h3 id="nearbyLibraryName">우리 지역 도서관</h3><p id="nearbyLibraryHint">위치 동의 후 가까운 도서관 한 곳을 안내합니다.</p><button id="findLibraryButton" type="button"><span>◎</span> GPS로 가까운 도서관 찾기</button><a id="nearbyLibraryLink" href="https://lib.gumi.go.kr/" target="_blank" rel="noopener" hidden>도서관 홈페이지 열기 <b>↗</b></a><small>위치정보는 저장하거나 전송하지 않습니다.</small></div>
+    </div>
+  </aside>
   <main>
     <section class="view active" id="curation">
       <section class="hero"><div class="hero-inner"><p class="eyebrow">✦ GMUC AI CURATION</p><h1>오늘의 업무에 필요한 지식,<br><em>AI가 꼭 맞는 책으로</em> 찾아드려요.</h1><p class="hero-description">직무와 독서 취향을 선택하면 실제 도서 데이터와 업무 연관성을 분석해 추천합니다.</p><div class="hero-meta"><span><i></i>최신 도서 데이터</span><span><i></i>직무별 맞춤 추천</span><span><i></i>즐겨찾기 서재</span></div></div><div class="hero-art"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="book book-a"><span>PUBLIC<br>VALUE</span></div><div class="book book-b"><span>SMART<br>CITY</span></div><div class="book book-c"><span>안전한<br>도시</span></div><div class="ai-orb"><span>AI</span><small>BOOK<br>CURATOR</small></div></div></section>
