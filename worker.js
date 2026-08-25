@@ -1,0 +1,43 @@
+const JOB_TREE={
+  '행정·기획':['공공기관 경영 혁신','정책 기획','보고서 작성','조직문화 리더십','데이터 기반 행정','지방공기업 ESG'],
+  '기계·설비':['기계설비 유지관리','시설관리 실무','설비 예방정비','공조냉동','스마트 시설관리','기계 안전'],
+  '난방·에너지':['에너지 관리','탄소중립 에너지','신재생에너지','열관리','에너지 효율','기후위기 대응'],
+  '환경':['환경 관리 ESG','탄소중립','자원순환','수질 관리','대기환경','생태환경'],
+  '토목·건축':['토목 시설물 관리','건축 유지관리','도시계획','스마트시티','건설 안전','공공공간 디자인'],
+  '전기·전자':['전기설비 유지관리','전기 안전','신재생에너지 전기','자동제어','전력 시스템','스마트그리드'],
+  '안전·소방':['산업안전 실무','소방 안전관리','재난 대응','위험성평가','중대재해 예방','안전문화'],
+  '전산·정보통신':['공공기관 디지털 전환','인공지능 업무 활용','정보보안','데이터 분석','스마트시티 정보통신','클라우드']
+};
+const PURPOSE_TREE={
+  '실무 문제 해결':['실무 가이드','현장 사례','문제 해결'],
+  '신기술·동향':['최신 기술 트렌드','미래 전망','혁신 사례'],
+  '리더십':['리더십','조직관리','소통'],
+  '보고서·기획':['기획 보고서','논리적 글쓰기','데이터 시각화'],
+  '교양·인사이트':['인문 교양','사회 변화','과학 교양'],
+  '자격증·시험':['기사 필기 기출','산업기사 실기','자격증 핵심이론']
+};
+const CERT_TREE={
+  '행정·기획':['행정사 시험'],
+  '기계·설비':['일반기계기사','공조냉동기계기사','설비보전기사'],
+  '난방·에너지':['에너지관리기사','가스기사','신재생에너지발전설비기사'],
+  '환경':['대기환경기사','수질환경기사','폐기물처리기사'],
+  '토목·건축':['토목기사','건축기사','건설안전기사'],
+  '전기·전자':['전기기사','전기산업기사','소방설비기사 전기'],
+  '안전·소방':['산업안전기사','건설안전기사','위험물산업기사','소방설비기사'],
+  '전산·정보통신':['정보처리기사','정보통신기사','정보보안기사']
+};
+
+const clean=(text='')=>String(text).replace(/<[^>]*>/g,'').replace(/&quot;/g,'"').replace(/&amp;/g,'&').trim();
+const isbnOf=(ids=[])=>ids.find(id=>id.type==='ISBN_13')?.identifier||ids[0]?.identifier||'';
+function normalizeGoogle(item,branch){const v=item.volumeInfo||{};return {id:`g:${item.id}`,title:clean(v.title),authors:v.authors||[],publisher:v.publisher||'',publishedDate:v.publishedDate||'',pageCount:Number(v.pageCount||0),description:clean(v.description||''),categories:v.categories||[],isbn:isbnOf(v.industryIdentifiers),thumbnail:(v.imageLinks?.thumbnail||'').replace(/^http:/,'https:'),source:'Google Books',branch};}
+function normalizeNaver(item,index,branch){return {id:`n:${item.isbn}:${index}`,title:clean(item.title),authors:clean(item.author).split('^').filter(Boolean),publisher:clean(item.publisher),publishedDate:item.pubdate?`${item.pubdate.slice(0,4)}-${item.pubdate.slice(4,6)}-${item.pubdate.slice(6,8)}`:'',pageCount:0,description:clean(item.description),categories:[],isbn:(item.isbn||'').split(' ').pop(),thumbnail:item.image||'',source:'네이버 책',branch};}
+async function google(query,env){const url=new URL('https://www.googleapis.com/books/v1/volumes');url.searchParams.set('q',query);url.searchParams.set('printType','books');url.searchParams.set('langRestrict','ko');url.searchParams.set('maxResults','20');if(env.GOOGLE_BOOKS_API_KEY)url.searchParams.set('key',env.GOOGLE_BOOKS_API_KEY);const res=await fetch(url);if(!res.ok)throw new Error(`Google ${res.status}`);const data=await res.json();return (data.items||[]).map(item=>normalizeGoogle(item,query));}
+async function naver(query,env){if(!env.NAVER_CLIENT_ID||!env.NAVER_CLIENT_SECRET)return [];const url=new URL('https://openapi.naver.com/v1/search/book.json');url.searchParams.set('query',query);url.searchParams.set('display','20');url.searchParams.set('sort','sim');const res=await fetch(url,{headers:{'X-Naver-Client-Id':env.NAVER_CLIENT_ID,'X-Naver-Client-Secret':env.NAVER_CLIENT_SECRET}});if(!res.ok)throw new Error(`Naver ${res.status}`);const data=await res.json();return (data.items||[]).map((item,index)=>normalizeNaver(item,index,query));}
+function buildQueries(profile){const certification=profile.purposes?.includes('자격증·시험'),queries=[];for(const job of profile.jobs||[]){const branches=certification?(CERT_TREE[job]||[`${job} 자격증`]):(JOB_TREE[job]||[job]);branches.forEach(q=>queries.push(q));}if(!certification)for(const purpose of profile.purposes||[])(PURPOSE_TREE[purpose]||[]).forEach(q=>queries.push(`${profile.jobs?.[0]||'공공기관'} ${q}`));return [...new Set(queries)].slice(0,12);}
+function score(book,profile){const text=`${book.title} ${book.description} ${(book.categories||[]).join(' ')}`.toLowerCase(),tokens=[...(profile.jobs||[]),...(profile.purposes||[])].flatMap(v=>v.split(/[·\s]/)).filter(v=>v.length>1);const hits=tokens.filter(token=>text.includes(token.toLowerCase())).length,year=Number((book.publishedDate||'').slice(0,4));return Math.min(98,72+hits*5+(year>=new Date().getFullYear()-3?5:0));}
+function diversify(groups,profile,limit=30){const seen=new Set(),result=[],queues=groups.map(group=>group.filter(book=>book.title&&book.isbn).sort((a,b)=>score(b,profile)-score(a,profile)));let cursor=0;while(result.length<limit&&queues.some(queue=>queue.length)){const queue=queues[cursor%queues.length];cursor++;const book=queue.shift();if(!book)continue;const key=book.isbn||book.title.replace(/\s/g,'').toLowerCase();if(seen.has(key))continue;seen.add(key);result.push({...book,match:score(book,profile),reason:`${book.branch} 검색 가지에서 찾은 도서로, ${profile.jobs.join('·')} 업무와 ${profile.purposes.join('·')} 목적을 함께 고려했습니다.`});}return result;}
+async function recommend(profile,env){const queries=buildQueries(profile);const settled=await Promise.allSettled(queries.flatMap(query=>[google(query,env),naver(query,env)]));const groups=settled.filter(result=>result.status==='fulfilled'&&result.value.length).map(result=>result.value);return {books:diversify(groups,profile),queries,generatedAt:new Date().toISOString()};}
+async function newBooks(env){const queries=['2026 신간','공공기관 경영 신간','기술 트렌드 신간','환경 ESG 신간','인문 교양 신간'];const groups=(await Promise.allSettled(queries.flatMap(query=>[google(query,env),naver(query,env)]))).filter(result=>result.status==='fulfilled').map(result=>result.value);return {books:diversify(groups,{jobs:['신간'],purposes:['최신 도서']},20)};}
+const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
+
+export default {async fetch(request,env){const url=new URL(request.url);try{if(request.method==='POST'&&url.pathname==='/api/recommend'){const profile=await request.json();if(!Array.isArray(profile.jobs)||!profile.jobs.length)return json({error:'업무 분야를 선택해 주세요.'},400);return json(await recommend(profile,env));}if(request.method==='GET'&&url.pathname==='/api/new-books')return json(await newBooks(env));if(request.method==='GET'&&url.pathname==='/api/status')return json({services:[{name:'Google Books',connected:true},{name:'네이버 책',connected:Boolean(env.NAVER_CLIENT_ID&&env.NAVER_CLIENT_SECRET)}]});return env.ASSETS.fetch(request);}catch(error){return json({error:error.message||'외부 도서 검색 중 오류가 발생했습니다.'},500);}}};

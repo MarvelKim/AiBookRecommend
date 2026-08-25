@@ -1,11 +1,13 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "aibookrecommend",
+  "main": "./worker.js",
   "compatibility_date": "2026-08-25",
   "observability": {
     "enabled": true
   },
   "assets": {
+    "binding": "ASSETS",
     "directory": "./public",
     "not_found_handling": "404-page"
   }

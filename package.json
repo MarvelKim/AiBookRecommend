@@ -1,1 +1,1 @@
-{"name":"gmuc-ai-book-curator","version":"1.0.0","private":true,"description":"구미도시공사 AI 북큐레이터","scripts":{"start":"node server.js","check":"node --check server.js && node --check public/app.js"},"engines":{"node":">=18"}}
+{"name":"gmuc-ai-book-curator","version":"1.0.0","private":true,"description":"구미도시공사 AI 북큐레이터","scripts":{"start":"node server.js","check":"node --check server.js && node --check public/app.js && node --check worker.js"},"engines":{"node":">=18"}}
