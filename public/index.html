@@ -8,7 +8,7 @@
 <body>
   <header class="topbar">
     <button class="brand nav-trigger" data-view="curation" type="button"><span class="brand-mark"><span></span><span></span><span></span></span><span class="brand-copy"><b>구미도시공사</b><small>AI BOOK CURATOR</small></span></button>
-    <nav class="nav"><button class="active nav-trigger" data-view="curation">도서 추천</button><button class="nav-trigger" data-view="new-books">신간 도서</button><button class="nav-trigger" data-view="library">나의 서재 <em id="favoriteCount">0</em></button></nav>
+    <nav class="nav"><button class="active nav-trigger" data-view="curation">도서 추천</button><button class="nav-trigger" data-view="new-books">신간 도서</button><button class="nav-trigger" data-view="rankings">추천도서 랭킹</button><button class="nav-trigger" data-view="library">나의 서재 <em id="favoriteCount">0</em></button></nav>
     <div class="header-actions"><button class="profile" id="profileButton" type="button"><span id="profileInitial">?</span><span class="profile-text"><b id="profileName">로그인</b><small id="profileHint">ID를 만들어 시작하세요</small></span></button></div>
   </header>
   <aside class="resource-index" aria-label="전자책 및 지역 도서관 바로가기">
@@ -51,7 +51,9 @@
       <section class="new-sector"><div class="sector-head"><div><span class="sector-mark new">N</span><h2>신간 도서</h2><p>책 제목을 누르면 구매 페이지로 이동합니다.</p></div><button class="slide-next" data-carousel-next="new" aria-label="다음 신간 도서">→</button></div><div class="carousel-viewport" id="newBooksViewport"><div class="horizontal-books" id="newBooksTrack"></div></div></section>
     </section>
 
-    <section class="view page-view" id="library"><div class="page-head"><span class="step">MY LIBRARY</span><h1><span id="libraryOwner">나</span>의 서재</h1><p>오늘 즐겨찾기한 책을 모아봅니다. 서재는 날짜가 바뀌면 자동으로 비워집니다.</p></div><div class="library-toolbar"><strong><span id="libraryCount">0</span>권을 보관 중입니다.</strong><button class="refresh" id="clearLibrary">서재 비우기</button></div><div class="book-grid" id="libraryGrid"></div><div class="empty-state" id="emptyLibrary"><span>♡</span><h3>아직 저장한 책이 없습니다.</h3><p>추천이나 신간 도서에서 ♡ 버튼을 눌러 추가해 보세요.</p><button class="recommend-button nav-trigger" data-view="curation">추천 도서 보러 가기</button></div></section>
+    <section class="view page-view" id="rankings"><div class="page-head"><span class="step">COMMUNITY RANKING</span><h1>추천도서 랭킹</h1><p>모든 이용자가 즐겨찾기에 담은 횟수를 실시간으로 집계합니다.</p></div><div class="ranking-toolbar"><strong>가장 많이 저장된 도서 TOP 100</strong><button class="refresh" id="refreshRankings">↻ 랭킹 새로고침</button></div><div class="book-grid ranking-grid" id="rankingGrid"></div><div class="empty-state" id="emptyRankings"><span>♡</span><h3>아직 집계된 추천도서가 없습니다.</h3><p>마음에 드는 책에 하트를 누르면 첫 랭킹이 시작됩니다.</p></div></section>
+
+    <section class="view page-view" id="library"><div class="page-head"><span class="step">MY LIBRARY</span><h1><span id="libraryOwner">나</span>의 서재</h1><p>즐겨찾기한 책은 날짜가 바뀌거나 다시 접속해도 계속 보관됩니다.</p></div><div class="library-toolbar"><strong><span id="libraryCount">0</span>권을 보관 중입니다.</strong><button class="refresh" id="clearLibrary">서재 비우기</button></div><div class="book-grid" id="libraryGrid"></div><div class="empty-state" id="emptyLibrary"><span>♡</span><h3>아직 저장한 책이 없습니다.</h3><p>추천이나 신간 도서에서 ♡ 버튼을 눌러 추가해 보세요.</p><button class="recommend-button nav-trigger" data-view="curation">추천 도서 보러 가기</button></div></section>
   </main>
   <footer><span>구미도시공사 AI 북큐레이터</span><span>책으로 연결되는 더 나은 도시, 더 나은 업무</span></footer>
 
