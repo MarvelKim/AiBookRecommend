@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 74 64" role="img" aria-labelledby="title desc">
   <title id="title">구미도시공사 AI 북큐레이터 심볼</title>
-  <desc id="desc">파랑과 초록으로 구성된 펼쳐진 지도 모양의 심볼</desc>
-  <path d="M2 14 23 2v49L2 62Z" fill="#1593cf"/>
-  <path d="m25 2 22 12v48L25 51Z" fill="#42b94d"/>
-  <path d="m49 14 23-12v49L49 62Z" fill="#153d73"/>
+  <desc id="desc">빨강, 연두, 남색으로 구성된 펼쳐진 지도 모양의 심볼</desc>
+  <path d="M2 14 23 2v49L2 62Z" fill="#f04b32"/>
+  <path d="m25 2 22 12v48L25 51Z" fill="#7acb16"/>
+  <path d="m49 14 23-12v49L49 62Z" fill="#294a7a"/>
   <path d="M2 37h17l16-7h16l21-13" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
   <circle cx="19" cy="37" r="2.6" fill="#fff"/>
   <circle cx="35" cy="30" r="2.6" fill="#fff"/>
