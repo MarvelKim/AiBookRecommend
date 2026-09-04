@@ -2,6 +2,8 @@ const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:
 const text=(value,max=2000)=>String(value??'').trim().slice(0,max);
 const id=(value='')=>String(value).trim().slice(0,80);
 const datePattern=/^\d{4}-\d{2}-\d{2}$/;
+const DEFAULT_TITLE_PROMPT='책 제목(글쓴이) 등 3권 - 한줄평 ‘내 인생의 큰 울림’';
+const DEFAULT_BODY_PROMPT='읽은 책, 필사한 내용과 느낀 점을 기록하세요.';
 
 function seoulDate(epochMs=Date.now()){
   const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(epochMs)).filter(part=>part.type!=='literal').map(part=>[part.type,part.value]));
@@ -18,7 +20,7 @@ function boardStatus(row){
 
 function boardDto(row){
   if(!row)return null;
-  return {id:row.board_id,name:row.name,type:row.board_type,description:row.description,startDate:row.start_date,endDate:row.end_date,target:Number(row.target_amount),unit:row.target_unit,status:boardStatus(row),createdAt:Number(row.created_at),updatedAt:Number(row.updated_at)};
+  return {id:row.board_id,name:row.name,type:row.board_type,description:row.description,titlePrompt:row.title_prompt||DEFAULT_TITLE_PROMPT,bodyPrompt:row.body_prompt||DEFAULT_BODY_PROMPT,startDate:row.start_date,endDate:row.end_date,target:Number(row.target_amount),unit:row.target_unit,status:boardStatus(row),createdAt:Number(row.created_at),updatedAt:Number(row.updated_at)};
 }
 
 function postDto(row){
@@ -39,7 +41,7 @@ function monthRange(startDate,endDate){
 function numberInRange(value,min,max){const parsed=Number(value);return Number.isFinite(parsed)&&parsed>=min&&parsed<=max?parsed:null;}
 
 function boardInput(body){
-  const name=text(body.name,100),type=text(body.type,40),description=text(body.description,2000),startDate=text(body.startDate,10),endDate=text(body.endDate,10),target=numberInRange(body.target,0,1000000000),unit=text(body.unit,10);
+  const name=text(body.name,100),type=text(body.type,40),description=text(body.description,2000),titlePrompt=text(body.titlePrompt,200)||DEFAULT_TITLE_PROMPT,bodyPrompt=text(body.bodyPrompt,500)||DEFAULT_BODY_PROMPT,startDate=text(body.startDate,10),endDate=text(body.endDate,10),target=numberInRange(body.target,0,1000000000),unit=text(body.unit,10);
   if(name.length<2)return {error:'게시판 이름은 2자 이상 입력해 주세요.'};
   if(!type)return {error:'챌린지 유형을 입력해 주세요.'};
   if(!datePattern.test(startDate)||!datePattern.test(endDate)||endDate<startDate)return {error:'챌린지 시작일과 종료일을 확인해 주세요.'};
@@ -47,7 +49,7 @@ function boardInput(body){
   if(!unit)return {error:'목표 단위를 입력해 주세요.'};
   const days=(Date.parse(`${endDate}T00:00:00Z`)-Date.parse(`${startDate}T00:00:00Z`))/86400000;
   if(days>3650)return {error:'챌린지 기간은 10년 이내로 설정해 주세요.'};
-  return {name,type,description,startDate,endDate,target,unit};
+  return {name,type,description,titlePrompt,bodyPrompt,startDate,endDate,target,unit};
 }
 
 function getBoard(sql,boardId){return [...sql.exec('SELECT * FROM challenge_boards WHERE board_id=? LIMIT 1',boardId)][0]||null;}
@@ -72,6 +74,7 @@ export function createChallengeSchema(sql){
   sql.exec(`
     CREATE TABLE IF NOT EXISTS challenge_boards (
       board_id TEXT PRIMARY KEY,name TEXT NOT NULL,board_type TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',
+      title_prompt TEXT NOT NULL DEFAULT '',body_prompt TEXT NOT NULL DEFAULT '',
       start_date TEXT NOT NULL,end_date TEXT NOT NULL,target_amount REAL NOT NULL,target_unit TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'active',created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL
     );
@@ -101,6 +104,9 @@ export function createChallengeSchema(sql){
       PRIMARY KEY(actor_id,action_name)
     );
   `);
+  const boardColumns=[...sql.exec('PRAGMA table_info(challenge_boards)')];
+  if(!boardColumns.some(column=>column.name==='title_prompt'))sql.exec("ALTER TABLE challenge_boards ADD COLUMN title_prompt TEXT NOT NULL DEFAULT ''");
+  if(!boardColumns.some(column=>column.name==='body_prompt'))sql.exec("ALTER TABLE challenge_boards ADD COLUMN body_prompt TEXT NOT NULL DEFAULT ''");
 }
 
 export function deleteChallengeAccountData(sql,userId){
@@ -159,8 +165,8 @@ export async function handleChallengeStoreRequest(sql,request,url=new URL(reques
 
   if(request.method==='POST'&&path==='/admin/challenges/boards/save'){
     const body=await request.json(),input=boardInput(body);if(input.error)return json(input,400);const now=Math.floor(Date.now()/1000),boardId=id(body.id)||crypto.randomUUID(),existing=getBoard(sql,boardId),status=body.status==='archived'||(!Object.hasOwn(body,'status')&&existing?.status==='archived')?'archived':'active';
-    if(existing)sql.exec('UPDATE challenge_boards SET name=?,board_type=?,description=?,start_date=?,end_date=?,target_amount=?,target_unit=?,status=?,updated_at=? WHERE board_id=?',input.name,input.type,input.description,input.startDate,input.endDate,input.target,input.unit,status,now,boardId);
-    else sql.exec('INSERT INTO challenge_boards(board_id,name,board_type,description,start_date,end_date,target_amount,target_unit,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',boardId,input.name,input.type,input.description,input.startDate,input.endDate,input.target,input.unit,status,now,now);
+    if(existing)sql.exec('UPDATE challenge_boards SET name=?,board_type=?,description=?,title_prompt=?,body_prompt=?,start_date=?,end_date=?,target_amount=?,target_unit=?,status=?,updated_at=? WHERE board_id=?',input.name,input.type,input.description,input.titlePrompt,input.bodyPrompt,input.startDate,input.endDate,input.target,input.unit,status,now,boardId);
+    else sql.exec('INSERT INTO challenge_boards(board_id,name,board_type,description,title_prompt,body_prompt,start_date,end_date,target_amount,target_unit,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',boardId,input.name,input.type,input.description,input.titlePrompt,input.bodyPrompt,input.startDate,input.endDate,input.target,input.unit,status,now,now);
     sql.exec('INSERT INTO challenge_audit_logs(admin_id,target_type,target_id,action_name,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?)',id(body.adminId)||'admin','board',boardId,existing?'update':'create',existing?JSON.stringify(boardDto(existing)):'',JSON.stringify({...input,status}),now);return json({ok:true,board:boardDto(getBoard(sql,boardId))},existing?200:201);
   }
 

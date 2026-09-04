@@ -12,11 +12,14 @@ const errors = [];
 const binding = config.durable_objects?.bindings?.find(item => item.name === lock.bindingName);
 const migrations = config.migrations || [];
 const sqliteClasses = migrations.flatMap(item => item.new_sqlite_classes || []);
+const r2Binding = config.r2_buckets?.find(item => item.binding === lock.challengeFileBinding);
 
 if (config.account_id !== lock.accountId) errors.push(`Cloudflare 계정 ID가 ${lock.accountId}와 다릅니다.`);
 if (config.name !== lock.workerName) errors.push(`Worker 이름이 ${lock.workerName}와 다릅니다.`);
 if (!binding) errors.push(`Durable Object 바인딩 ${lock.bindingName}을 찾을 수 없습니다.`);
 if (binding?.class_name !== lock.className) errors.push(`Durable Object 클래스가 ${lock.className}와 다릅니다.`);
+if (!r2Binding) errors.push(`첨부파일 R2 바인딩 ${lock.challengeFileBinding}을 찾을 수 없습니다.`);
+if (r2Binding?.bucket_name !== lock.challengeBucketName) errors.push(`첨부파일 R2 버킷이 ${lock.challengeBucketName}와 다릅니다.`);
 if (!sqliteClasses.includes(lock.className)) errors.push(`${lock.className}의 SQLite 마이그레이션이 유지되지 않았습니다.`);
 if (migrations.some(item => item.deleted_classes || item.renamed_classes || item.transferred_classes)) {
   errors.push('랭킹 저장소를 삭제·이름 변경·이전하는 마이그레이션이 포함되어 있습니다.');
@@ -36,3 +39,4 @@ if (errors.length) {
 }
 
 console.log(`랭킹 저장소 연결 확인: ${lock.workerName}/${lock.className}/${lock.objectName}`);
+console.log(`챌린지 첨부 저장소 연결 확인: ${lock.challengeFileBinding}/${lock.challengeBucketName}`);

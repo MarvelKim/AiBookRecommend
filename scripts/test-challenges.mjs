@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import worker, { RankingStore } from '../worker.js';
+import { createChallengeSchema } from '../challenge-store.js';
+import { assertChallengePreserved } from './backup-challenges.mjs';
 
 class SqlStorage {
   constructor() { this.database = new DatabaseSync(':memory:'); }
@@ -19,6 +21,24 @@ class MemoryR2 {
   async get(key) { const item = this.objects.get(key); return item ? { body: item.bytes } : null; }
   async delete(key) { this.objects.delete(key); }
 }
+
+const legacySql = new SqlStorage();
+legacySql.exec(`CREATE TABLE challenge_boards (
+  board_id TEXT PRIMARY KEY,name TEXT NOT NULL,board_type TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',
+  start_date TEXT NOT NULL,end_date TEXT NOT NULL,target_amount REAL NOT NULL,target_unit TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL
+)`);
+legacySql.exec('INSERT INTO challenge_boards(board_id,name,board_type,description,start_date,end_date,target_amount,target_unit,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)','legacy-board','기존 챌린지','독서','기존 설명','2026-01-01','2026-12-31',12,'권','active',1,1);
+createChallengeSchema(legacySql);
+const migratedBoardColumns = legacySql.exec('PRAGMA table_info(challenge_boards)').map((column) => column.name);
+assert.ok(migratedBoardColumns.includes('title_prompt'));
+assert.ok(migratedBoardColumns.includes('body_prompt'));
+assert.equal(legacySql.exec('SELECT name FROM challenge_boards WHERE board_id=?','legacy-board')[0].name,'기존 챌린지');
+
+const preservedBefore={boards:[{id:'board-1'}],details:[{post:{id:'post-1'},comments:[{id:'comment-1'}]}],attachments:[{id:'file-1'}]};
+const preservedAfter={boards:[{id:'board-1'},{id:'board-2'}],details:[{post:{id:'post-1'},comments:[{id:'comment-1'}]}],attachments:[{id:'file-1'}]};
+assert.doesNotThrow(()=>assertChallengePreserved(preservedBefore,preservedAfter));
+assert.throws(()=>assertChallengePreserved(preservedBefore,{boards:[],details:[],attachments:[]}),/사라진 챌린지 데이터/);
 
 const sql = new SqlStorage();
 const store = new RankingStore({ storage: { sql }, blockConcurrencyWhile(callback) { return callback(); } });
@@ -52,7 +72,7 @@ assert.equal((await worker.fetch(new Request('https://gmuc.test/api/admin/challe
 
 const boardResponse = await internal('/admin/challenges/boards/save', {
   method: 'POST', headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ id: 'reading-2026', name: '독서 챌린지(2026)', type: '독서', description: '테스트', startDate: '2026-01-01', endDate: '2026-12-31', target: 8, unit: '권', adminId: 'admin' }),
+  body: JSON.stringify({ id: 'reading-2026', name: '독서 챌린지(2026)', type: '독서', description: '테스트', titlePrompt: '도서명과 한줄평을 입력하세요.', bodyPrompt: '독서 소감을 자유롭게 작성하세요.', startDate: '2026-01-01', endDate: '2026-12-31', target: 8, unit: '권', adminId: 'admin' }),
 });
 assert.equal(boardResponse.status, 201);
 
@@ -75,8 +95,14 @@ await internal('/admin/challenges/boards/save', {
 });
 const publicBoards = await (await worker.fetch(new Request('https://gmuc.test/api/challenges'), env, {})).json();
 assert.equal(publicBoards.boards.some((board) => board.id === 'archived-board'), false);
+const readingBoard = publicBoards.boards.find((board) => board.id === 'reading-2026');
+assert.equal(readingBoard.titlePrompt, '도서명과 한줄평을 입력하세요.');
+assert.equal(readingBoard.bodyPrompt, '독서 소감을 자유롭게 작성하세요.');
 const adminBoards = await (await worker.fetch(new Request('https://gmuc.test/api/admin/challenges/boards', { headers: { cookie: adminCookie } }), env, {})).json();
 assert.equal(adminBoards.boards.some((board) => board.id === 'archived-board'), true);
+const archivedBoard = adminBoards.boards.find((board) => board.id === 'archived-board');
+assert.match(archivedBoard.titlePrompt, /책 제목/);
+assert.match(archivedBoard.bodyPrompt, /읽은 책/);
 
 for (const [postId, authorId, achievement] of [['p1', 'reader-a', 5], ['p2', 'reader-a', 4], ['p3', 'reader-b', 3]]) {
   const response = await internal('/challenges/posts', {

@@ -6,4 +6,5 @@ npm-debug.log*
 .dev.vars*
 !.dev.vars.example
 .ranking-backups/
+.challenge-backups/
 /★0*.txt

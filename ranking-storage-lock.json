@@ -4,5 +4,7 @@
   "bindingName": "RANKINGS",
   "className": "RankingStore",
   "objectName": "global-book-ranking",
+  "challengeFileBinding": "CHALLENGE_FILES",
+  "challengeBucketName": "gmuc-challenge-files",
   "liveOrigin": "https://gmuc.aibookrecommend.workers.dev"
 }
