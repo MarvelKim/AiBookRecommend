@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "aibookrecommend",
+  "name": "gmuc",
+  "account_id": "dfb8e2f3cce1c0e0425c071aa4537068",
   "main": "./worker.js",
   "compatibility_date": "2026-08-25",
   "observability": {
@@ -11,6 +12,9 @@
       { "name": "RANKINGS", "class_name": "RankingStore" }
     ]
   },
+  "r2_buckets": [
+    { "binding": "CHALLENGE_FILES", "bucket_name": "gmuc-challenge-files" }
+  ],
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["RankingStore"] }
   ],

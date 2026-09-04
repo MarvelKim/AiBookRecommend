@@ -1,0 +1,8 @@
+{
+  "accountId": "dfb8e2f3cce1c0e0425c071aa4537068",
+  "workerName": "gmuc",
+  "bindingName": "RANKINGS",
+  "className": "RankingStore",
+  "objectName": "global-book-ranking",
+  "liveOrigin": "https://gmuc.aibookrecommend.workers.dev"
+}
