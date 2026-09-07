@@ -66,7 +66,8 @@ let pendingChallengeWrite=false;
 let pendingLibraryView=false;
 const DEFAULT_CHALLENGE_TITLE_PROMPT='책 제목(글쓴이) 등 3권 - 한줄평 ‘내 인생의 큰 울림’';
 const DEFAULT_CHALLENGE_BODY_PROMPT='읽은 책, 필사한 내용과 느낀 점을 기록하세요.';
-const challengeState={boards:[],boardId:'',page:1,query:'',postId:'',files:[],adminBoards:[],adminStats:null,adminStatsPage:1,adminPostPage:1,adminTab:'info'};
+const CHALLENGE_TYPES=['독서','필사'];
+const challengeState={boards:[],boardId:'',type:'독서',page:1,query:'',postId:'',files:[],adminBoards:[],adminStats:null,adminStatsPage:1,adminPostPage:1,adminTab:'info'};
 const renewalIcon='<svg class="renewal-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M18.2 9A7 7 0 0 0 6.4 6.4L4 9m16 6-2.4 2.6A7 7 0 0 1 5.8 15"/></svg>';
 const escapeHtml=(v='')=>String(v).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const shelfKey=()=>`gmuc-shelf:${state.user}`;
@@ -141,6 +142,16 @@ function challengeStatus(status){return {active:'진행 중',scheduled:'예정',
 function challengeDate(epoch){return new Date(Number(epoch)*1000).toLocaleString('ko-KR',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});}
 function challengeAmount(value){return Number(value||0).toLocaleString('ko-KR',{maximumFractionDigits:2});}
 function currentChallengeBoard(){return challengeState.boards.find(board=>board.id===challengeState.boardId)||null;}
+function challengeTypeOf(board){return String(board?.type||'').includes('필사')?'필사':'독서';}
+function visibleChallengeBoards(){return challengeState.boards.filter(board=>challengeTypeOf(board)===challengeState.type);}
+function renderChallengeTypes(){
+  const tabs=$('#challengeTypeTabs');
+  tabs.querySelectorAll('[data-challenge-type]').forEach(button=>{const selected=button.dataset.challengeType===challengeState.type;button.classList.toggle('active',selected);button.setAttribute('aria-selected',String(selected));button.tabIndex=selected?0:-1;});
+  tabs.onclick=event=>{const button=event.target.closest('[data-challenge-type]');if(button&&button.dataset.challengeType!==challengeState.type)selectChallengeType(button.dataset.challengeType).catch(error=>toast(error.message));};
+}
+async function selectChallengeType(type){
+  if(!CHALLENGE_TYPES.includes(type))return;challengeState.type=type;challengeState.page=1;challengeState.query='';$('#challengeSearch').value='';const boards=visibleChallengeBoards(),board=(boards.find(item=>item.status==='active')||boards[0])||null;challengeState.boardId=board?.id||'';renderChallengeTypes();renderChallengeBoards();if(board)await selectChallengeBoard(board.id,false);
+}
 function renderChallengePagination(container,page,totalPages,onSelect){
   if(totalPages<=1){container.innerHTML='';return;}
   const start=Math.max(1,Math.min(page-2,totalPages-4)),end=Math.min(totalPages,start+4),buttons=[];
@@ -149,20 +160,20 @@ function renderChallengePagination(container,page,totalPages,onSelect){
   buttons.push(`<button type="button" data-page="${page+1}" ${page===totalPages?'disabled':''} aria-label="다음 페이지">›</button>`);container.innerHTML=buttons.join('');container.onclick=event=>{const button=event.target.closest('[data-page]');if(!button||button.disabled)return;onSelect(Number(button.dataset.page));};
 }
 function renderChallengeBoards(){
-  const tabs=$('#challengeBoardTabs'),stateBox=$('#challengeState'),button=board=>`<button type="button" role="tab" aria-selected="${board.id===challengeState.boardId}" class="${board.id===challengeState.boardId?'active':''}" data-board-id="${escapeHtml(board.id)}"><span>${escapeHtml(board.type)}</span><b>${escapeHtml(board.name)}</b><em class="status-${escapeHtml(board.status)}">${escapeHtml(challengeStatus(board.status))}</em></button>`,active=challengeState.boards.filter(board=>board.status==='active'),other=challengeState.boards.filter(board=>board.status!=='active');tabs.innerHTML=`${active.length?`<div class="challenge-board-group"><p>진행 중</p>${active.map(button).join('')}</div>`:''}${other.length?`<div class="challenge-board-group secondary"><p>예정·지난 챌린지</p>${other.map(button).join('')}</div>`:''}`;
+  const tabs=$('#challengeBoardTabs'),stateBox=$('#challengeState'),boards=visibleChallengeBoards(),button=board=>`<button type="button" role="tab" aria-selected="${board.id===challengeState.boardId}" class="${board.id===challengeState.boardId?'active':''}" data-board-id="${escapeHtml(board.id)}"><span>${escapeHtml(board.type)}</span><b>${escapeHtml(board.name)}</b><em class="status-${escapeHtml(board.status)}">${escapeHtml(challengeStatus(board.status))}</em></button>`,active=boards.filter(board=>board.status==='active'),other=boards.filter(board=>board.status!=='active');tabs.innerHTML=`${active.length?`<div class="challenge-board-group"><p>진행 중</p>${active.map(button).join('')}</div>`:''}${other.length?`<div class="challenge-board-group secondary"><p>예정·지난 챌린지</p>${other.map(button).join('')}</div>`:''}`;
   tabs.onclick=event=>{const button=event.target.closest('[data-board-id]');if(button)selectChallengeBoard(button.dataset.boardId);};
-  stateBox.hidden=Boolean(challengeState.boards.length);if(!challengeState.boards.length){stateBox.textContent='아직 등록된 챌린지 게시판이 없습니다.';$('#challengeListPanel').hidden=true;$('#challengeDetail').hidden=true;$('#challengeEditor').hidden=true;}
-  const options=challengeState.boards.filter(board=>board.status==='active').map(board=>`<option value="${escapeHtml(board.id)}">${escapeHtml(board.name)}</option>`).join('');$('#challengePostBoard').innerHTML=options||'<option value="">진행 중인 게시판이 없습니다</option>';
+  stateBox.hidden=Boolean(boards.length);if(!boards.length){stateBox.textContent=`아직 등록된 ${challengeState.type} 챌린지 게시판이 없습니다.`;$('#challengeListPanel').hidden=true;$('#challengeDetail').hidden=true;$('#challengeEditor').hidden=true;}
+  const options=active.map(board=>`<option value="${escapeHtml(board.id)}">${escapeHtml(board.name)}</option>`).join('');$('#challengePostBoard').innerHTML=options||'<option value="">진행 중인 게시판이 없습니다</option>';
 }
 function renderChallengeSummary(board){
   $('#challengeBoardType').textContent=board.type.toUpperCase();$('#challengeBoardName').textContent=board.name;$('#challengeBoardDescription').textContent=board.description||'함께 목표를 이루는 챌린지 게시판입니다.';$('#challengeBoardPeriod').textContent=`${board.startDate} ~ ${board.endDate}`;$('#challengeBoardGoal').textContent=`목표 ${challengeAmount(board.target)}${board.unit}`;const status=$('#challengeBoardStatus');status.textContent=challengeStatus(board.status);status.className=`status-${board.status}`;const write=$('#challengeWriteOpen');write.disabled=board.status!=='active';write.innerHTML=board.status==='active'?'글쓰기 <i>＋</i>':'열람 전용';
 }
 async function loadChallenges(force=false){
   const stateBox=$('#challengeState');stateBox.hidden=false;stateBox.textContent='챌린지 게시판을 불러오는 중입니다.';
-  try{const data=await requestJson('/api/challenges');challengeState.boards=data.boards||[];if(force||!challengeState.boards.some(board=>board.id===challengeState.boardId))challengeState.boardId=(challengeState.boards.find(board=>board.status==='active')||challengeState.boards[0])?.id||'';renderChallengeBoards();if(challengeState.boardId)await selectChallengeBoard(challengeState.boardId,false);}catch(error){stateBox.hidden=false;stateBox.textContent=error.message;$('#challengeListPanel').hidden=true;}
+  try{const data=await requestJson('/api/challenges');challengeState.boards=data.boards||[];if(force||!challengeState.boards.some(board=>board.id===challengeState.boardId)){const preferred=visibleChallengeBoards(),board=preferred.find(item=>item.status==='active')||preferred[0]||challengeState.boards.find(item=>item.status==='active')||challengeState.boards[0];challengeState.boardId=board?.id||'';if(board)challengeState.type=challengeTypeOf(board);}renderChallengeTypes();renderChallengeBoards();if(challengeState.boardId)await selectChallengeBoard(challengeState.boardId,false);}catch(error){stateBox.hidden=false;stateBox.textContent=error.message;$('#challengeListPanel').hidden=true;}
 }
 async function selectChallengeBoard(boardId,resetPage=true){
-  challengeState.boardId=boardId;if(resetPage){challengeState.page=1;challengeState.query='';$('#challengeSearch').value='';}renderChallengeBoards();const board=currentChallengeBoard();if(!board)return;renderChallengeSummary(board);$('#challengePostBoard').value=board.status==='active'?board.id:$('#challengePostBoard option')?.value||'';updateChallengeGoalPreview();showChallengeList();await loadChallengePosts();
+  challengeState.boardId=boardId;const board=currentChallengeBoard();if(!board)return;challengeState.type=challengeTypeOf(board);if(resetPage){challengeState.page=1;challengeState.query='';$('#challengeSearch').value='';}renderChallengeTypes();renderChallengeBoards();renderChallengeSummary(board);$('#challengePostBoard').value=board.status==='active'?board.id:$('#challengePostBoard option')?.value||'';updateChallengeGoalPreview();showChallengeList();await loadChallengePosts();
 }
 function showChallengeList(){$('#challengeListPanel').hidden=false;$('#challengeDetail').hidden=true;$('#challengeEditor').hidden=true;challengeState.postId='';}
 async function loadChallengePosts(){
