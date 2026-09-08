@@ -42,11 +42,11 @@ const repeated=await Promise.all(Array.from({length:8},()=>delivery('same-reques
 assert.equal((await f.internal('/gudongi/recommendation/check',{userId:'reader',requestId:'same-request',fingerprint:'tampered'})).status,409);
 assert.equal((await f.api('/api/account/recommendations/log',{bookCount:10000,totalXp:9999},cookie)).status,410);
 const favorite=(id,saved=true,userCookie=cookie,userId='reader')=>f.api('/api/favorite',{userId:`account:${userId}`,saved,book:{title:`서재 도서 ${id}`,isbn:`shelf-${id}`,authors:['테스트 저자']}},userCookie);
-for(let i=0;i<5;i++){const response=await favorite(i),data=await response.json();assert.equal(response.status,200);assert.equal(data.earnedXp,i<4?1:0);assert.equal(data.quota.used,i+1);}
-assert.equal((await profile()).totalXp,4);assert.equal((await profile()).quota.used,5);assert.equal((await profile()).quota.xp,4);
-const duplicate=await (await favorite(0)).json();assert.equal(duplicate.newlyAdded,false);assert.equal(duplicate.earnedXp,0);assert.equal(duplicate.quota.used,5);
-await favorite(0,false);const readded=await(await favorite(0)).json();assert.equal(readded.newlyAdded,true);assert.equal(readded.earnedXp,0);assert.equal(readded.quota.used,5);
-for(let i=5;i<30;i++)assert.equal((await favorite(i)).status,200);
+for(let i=0;i<6;i++){const response=await favorite(i),data=await response.json();assert.equal(response.status,200);assert.equal(data.earnedXp,i<5?1:0);assert.equal(data.quota.used,i+1);}
+assert.equal((await profile()).totalXp,5);assert.equal((await profile()).quota.used,6);assert.equal((await profile()).quota.xp,5);assert.equal((await profile()).level,2);
+const duplicate=await (await favorite(0)).json();assert.equal(duplicate.newlyAdded,false);assert.equal(duplicate.earnedXp,0);assert.equal(duplicate.quota.used,6);
+await favorite(0,false);const readded=await(await favorite(0)).json();assert.equal(readded.newlyAdded,true);assert.equal(readded.earnedXp,0);assert.equal(readded.quota.used,6);
+for(let i=6;i<30;i++)assert.equal((await favorite(i)).status,200);
 assert.equal((await profile()).quota.used,30);assert.equal((await favorite(30)).status,429);assert.equal((await delivery('still-unlimited-after-shelf-limit',60)).status,200);
 const nextMidnight=Date.parse((await profile()).quota.resetAt);assert.equal(quota(f.sql,'reader',nextMidnight).used,0);assert.equal(quota(f.sql,'reader',nextMidnight).xp,0);
 
@@ -67,13 +67,13 @@ legacy.sql.exec("DELETE FROM gudongi_migrations WHERE version='v1'"); // Memory-
 for(let i=0;i<7;i++)legacy.sql.exec('INSERT INTO recommendation_sessions(user_id,book_count,profile_json,created_at) VALUES(?,?,?,?)','legacy-reader',i===6?0:6,'{}',Date.parse(`${seoulDay()}T00:00:00+09:00`)/1000+i);
 legacy.sql.exec('INSERT INTO challenge_posts VALUES(?,?,?,?,?,?,?,?)','legacy-post','test-board','legacy-reader','과거 기록','그대로 보존',2.25,1,1);
 const snapshot=()=>Object.fromEntries(['accounts','recommendation_sessions','challenge_posts','favorites','user_registry'].map(t=>[t,legacy.sql.exec(`SELECT * FROM ${t}`)]));
-const before=snapshot();legacy.storage.transactionSync(()=>createGudongiSchema(legacy.sql));legacy.storage.transactionSync(()=>createGudongiSchema(legacy.sql));assert.deepEqual(snapshot(),before);assert.equal(gudongiProfile(legacy.sql,'legacy-reader').totalXp,10.75);assert.equal(quota(legacy.sql,'legacy-reader').used,0);assert.equal(quota(legacy.sql,'legacy-reader').xp,4);assert.equal(quota(legacy.sql,'legacy-reader').remainingXp,0);
+const before=snapshot();legacy.storage.transactionSync(()=>createGudongiSchema(legacy.sql));legacy.storage.transactionSync(()=>createGudongiSchema(legacy.sql));assert.deepEqual(snapshot(),before);assert.equal(gudongiProfile(legacy.sql,'legacy-reader').totalXp,10.75);assert.equal(quota(legacy.sql,'legacy-reader').used,0);assert.equal(quota(legacy.sql,'legacy-reader').xp,4);assert.equal(quota(legacy.sql,'legacy-reader').remainingXp,1);
 
 // Attachment failure cannot leave a post or XP; retried uploads don't leave orphan objects.
 const attachmentForm=makePost('attachments-request',1);attachmentForm.append('files',new Blob([new Uint8Array([137,80,78,71,13,10,26,10,0])],{type:'image/png'}),'sample.png');
 const attached=await f.api('/api/challenges/test-board/posts',attachmentForm,cookie);assert.equal(attached.status,201);const attachedData=await attached.json();
 const retryForm=makePost('attachments-request',1);retryForm.append('files',new Blob([new Uint8Array([137,80,78,71,13,10,26,10,0])],{type:'image/png'}),'sample.png');assert.equal((await f.api('/api/challenges/test-board/posts',retryForm,cookie)).status,200);assert.equal(f.objects.size,1);
-await f.internal('/admin/challenges/boards/delete',{id:'test-board',adminId:'admin'});assert.equal((await profile()).totalXp,4);assert.equal(f.sql.exec('SELECT COUNT(*) n FROM challenge_posts WHERE post_id=?',attachedData.postId)[0].n,0);
+await f.internal('/admin/challenges/boards/delete',{id:'test-board',adminId:'admin'});assert.equal((await profile()).totalXp,5);assert.equal(f.sql.exec('SELECT COUNT(*) n FROM challenge_posts WHERE post_id=?',attachedData.postId)[0].n,0);
 assert.equal((await f.api('/api/account/delete',{password:'new-password'},cookie)).status,200);
 for(const table of ['gudongi_profiles','gudongi_xp','gudongi_deliveries','gudongi_library_additions','gudongi_audit'])assert.equal(f.sql.exec(`SELECT COUNT(*) n FROM ${table} WHERE user_id=?`,'reader')[0].n,0);
-console.log('구동이: 레벨·소수 EXP·서재 30권/4 EXP·중복·원자성·소급 보존·인증·계정 설정 회귀 테스트 통과');
+console.log('구동이: 레벨·소수 EXP·서재 30권/5 EXP·중복·원자성·소급 보존·인증·계정 설정 회귀 테스트 통과');

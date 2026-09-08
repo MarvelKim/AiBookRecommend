@@ -60,7 +60,7 @@ export function createGudongiSchema(sql){
 }
 export function quota(sql,userId,now=Date.now()){
   const day=seoulDay(now),used=Number(row(sql,'SELECT COUNT(*) AS n FROM gudongi_library_additions WHERE user_id=? AND earned_date=?',userId,day).n),xp=Number(row(sql,"SELECT COALESCE(SUM(xp_amount),0) AS n FROM gudongi_xp WHERE user_id=? AND earned_date=? AND source_type IN ('library','recommendation')",userId,day).n);
-  return {day,used,limit:30,remaining:Math.max(0,30-used),xp,remainingXp:Math.max(0,4-xp),resetAt:new Date(Date.parse(`${day}T00:00:00+09:00`)+86400000).toISOString()};
+  return {day,used,limit:30,remaining:Math.max(0,30-used),xp,remainingXp:Math.max(0,5-xp),resetAt:new Date(Date.parse(`${day}T00:00:00+09:00`)+86400000).toISOString()};
 }
 export function recordLibraryAddition(sql,userId,bookKey,now=Date.now()){
   const q=quota(sql,userId,now),existing=row(sql,'SELECT 1 AS found FROM gudongi_library_additions WHERE user_id=? AND earned_date=? AND book_key=?',userId,q.day,bookKey);

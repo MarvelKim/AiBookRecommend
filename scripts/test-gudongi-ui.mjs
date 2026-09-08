@@ -44,6 +44,7 @@ try{
     const earned=await evaluate(`(async()=>{const p=(await(await fetch('/api/account/gudongi')).json()).gudongi;return {xp:p.totalXp,used:p.quota.used,daily:p.quota.xp,books:state.books.length}})()`);
     assert.deepEqual(earned,{xp:22,used:1,daily:1,books:60});
     await evaluate(`(async()=>{await showView('library');await window.refreshMyInfo();document.querySelector('#myGudongiTab').click()})()`);await delay(200);
+    assert.equal(await evaluate(`document.querySelectorAll('.daily-stamps>span').length`),5);
     assert.equal(await evaluate(`document.querySelectorAll('.daily-stamps .is-earned').length`),1);
     assert.equal(await evaluate(`document.querySelectorAll('.xp-group').length`),5);
     assert.equal(await evaluate(`document.querySelectorAll('.xp-unit').length`),30);
