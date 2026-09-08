@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { mkdir,writeFile } from 'node:fs/promises';
 import path from 'node:path';
 const output=path.resolve(process.env.TEMP||'C:/CLI/output',`gmuc-gudongi-ui-${Date.now()}`);await mkdir(output,{recursive:true});
-const browser=spawn('C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',['--headless=new','--disable-gpu','--no-first-run','--hide-scrollbars','--remote-debugging-port=9356',`--user-data-dir=${output}/edge-profile`,'--window-size=1440,1000','http://127.0.0.1:4186'],{stdio:'ignore',windowsHide:true});
+const browser=spawn('C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',['--headless=new','--disable-gpu','--no-first-run','--hide-scrollbars','--remote-debugging-port=9356',`--user-data-dir=${output}/edge-profile`,'--window-size=1440,1000',`http://127.0.0.1:${process.env.GUDONGI_PREVIEW_PORT||4186}`],{stdio:'ignore',windowsHide:true});
 const delay=ms=>new Promise(r=>setTimeout(r,ms));let socket;
 try{
   let endpoint;for(let i=0;i<80;i++){try{const pages=await(await fetch('http://127.0.0.1:9356/json/list')).json();endpoint=pages.find(p=>p.type==='page')?.webSocketDebuggerUrl;if(endpoint)break;}catch{}await delay(100);}if(!endpoint)throw Error('Headless Edge failed to start');
@@ -28,6 +28,28 @@ try{
     assert.equal(await evaluate(`document.querySelector('#appearanceDialog').open`),true);
     await shot(`appearance-${name}`);await evaluate(`document.querySelector('#appearanceDialog').close()`);
   }
+  if(process.argv.includes('--recommend-flow')){
+    await evaluate(`(async()=>{await showView('curation');document.querySelectorAll('.chip').forEach(b=>b.classList.remove('selected'));document.querySelector('[data-group="jobs"]').classList.add('selected');document.querySelectorAll('[data-group="purposes"]')[4].classList.add('selected');document.querySelector('[data-field="level"]').value='\uC2E4\uBB34';document.querySelector('[data-field="freshness"]').value='\uBB34\uAD00';document.querySelector('[data-field="practical"]').value='\uBB34\uAD00';document.querySelector('#recommendButton').click()})()`);
+    for(let i=0;i<100;i++){if(await evaluate(`!document.querySelector('#recommendButton').disabled`))break;await delay(100);}
+    const earned=await evaluate(`(async()=>{const p=(await(await fetch('/api/account/gudongi')).json()).gudongi;return {xp:p.totalXp,used:p.quota.used,daily:p.quota.xp,books:state.books.length}})()`);
+    assert.deepEqual(earned,{xp:22,used:6,daily:1,books:6});
+    await evaluate(`(async()=>{await showView('library');await window.refreshMyInfo();document.querySelector('#myGudongiTab').click()})()`);await delay(200);
+    assert.equal(await evaluate(`document.querySelectorAll('.daily-stamps .is-earned').length`),1);
+    assert.equal(await evaluate(`document.querySelectorAll('.xp-group').length`),5);
+    assert.equal(await evaluate(`document.querySelectorAll('.xp-unit').length`),30);
+    assert.equal(await evaluate(`document.querySelectorAll('.xp-unit.filled').length`),7);
+    for(const [name,width,height] of [['desktop',1440,1100],['mobile',390,844]]){
+      await command('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<600});
+      await evaluate(`document.querySelector('.gudongi-daily').scrollIntoView({block:'center',behavior:'instant'})`);await delay(150);await shot('daily-'+name);
+      assert.equal(await evaluate(`document.documentElement.scrollWidth>innerWidth`),false);
+    }
+    await evaluate(`(async()=>{await fetch('/__test/search/empty',{method:'POST'});await showView('curation');document.querySelector('#recommendButton').click()})()`);
+    for(let i=0;i<100;i++){if(await evaluate(`!document.querySelector('#recommendButton').disabled`))break;await delay(100);}
+    assert.equal(await evaluate(`document.querySelectorAll('#bookGrid .book-card').length`),0);
+    assert.equal(await evaluate(`state.books.length`),0);
+    assert.equal(await evaluate(`(async()=>{return (await(await fetch('/api/account/gudongi')).json()).gudongi.totalXp})()`),22);
+    await evaluate(`(async()=>{await showView('library');await window.refreshMyInfo();document.querySelector('#myGudongiTab').click()})()`);await delay(200);
+  }
   await command('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
   await evaluate(`document.querySelector('#mySettingsButton').click()`);await shot('account-settings');
   await evaluate(`(async()=>{const blob=await(await fetch('/characters/gudongi/reading.png')).blob();const transfer=new DataTransfer();transfer.items.add(new File([blob],'reading.png',{type:'image/png'}));const input=document.querySelector('#avatarFile');input.files=transfer.files;input.dispatchEvent(new Event('change'));})()`);await delay(300);
@@ -40,11 +62,16 @@ try{
   await evaluate(`document.querySelector('#mySettingsDialog').close();document.querySelector('#changeAppearance').click();document.querySelector('[data-appearance="reading"]').click()`);await delay(250);assert.equal(await evaluate(`document.querySelector('.gudongi-intro h2').textContent`),'책 읽는 구동이');
   await command('Page.reload');await delay(1400);await evaluate(`(async()=>{state.user='preview-reader';state.isAdmin=false;updateUserUI();await showView('library');await window.refreshMyInfo();document.querySelector('#myGudongiTab').click()})()`);assert.equal(await evaluate(`!!document.querySelector('#profileInitial img')`),true);assert.equal(await evaluate(`document.querySelector('.gudongi-intro h2').textContent`),'책 읽는 구동이');
   await evaluate(`document.querySelector('#myLibraryTab').click()`);assert.equal(await evaluate(`document.querySelector('#myGudongiPanel').hidden`),true);assert.equal(await evaluate(`document.querySelector('#myLibraryPanel').hidden`),false);
+  await evaluate(`(async()=>{const p=(await(await fetch('/api/account/gudongi')).json()).gudongi;document.querySelector('#myGudongiTab').click();window.applyGudongi({...p,level:3,max:false,totalXp:23,currentXp:8,requiredXp:30,remainingXp:22,levelUp:false})})()`);
+  assert.equal(await evaluate(`document.querySelectorAll('.xp-group').length`),5);
+  assert.equal(await evaluate(`document.querySelectorAll('.xp-group:first-child .xp-unit').length`),6);
+  assert.equal(await evaluate(`document.querySelectorAll('.xp-unit.filled').length`),8);
+  await evaluate(`document.querySelector('.gudongi-progress').scrollIntoView({block:'center',behavior:'instant'})`);await shot('xp-8-of-30');
   for(const [totalXp,currentXp] of [[95,50],[105,60],[108,63]]){
     await evaluate(`(async()=>{const p=(await(await fetch('/api/account/gudongi')).json()).gudongi;const appearance=p.appearanceCatalog.find(a=>a.id==='suit');window.applyGudongi({...p,appearance,appearanceId:'suit',level:5,max:true,totalXp:${totalXp},currentXp:${currentXp},requiredXp:50,remainingXp:0,segments:5,levelUp:false});document.querySelector('#myGudongiTab').click();await document.querySelector('.gudongi-stage img').decode()})()`);
     assert.equal(await evaluate(`document.querySelector('.gudongi-level').textContent`),'LV MAX');
     assert.equal(await evaluate(`document.querySelector('.gudongi-progress>div>span').textContent`),`EXP (${currentXp}/50)`);
-    assert.equal(await evaluate(`document.querySelectorAll('.xp-segments .filled').length`),5);
+    assert.equal(await evaluate(`document.querySelectorAll('.xp-segments .filled').length`),50);
     assert.equal(await evaluate(`document.querySelector('.xp-segments').getAttribute('aria-valuenow')`),'50');
     assert.equal(await evaluate(`document.querySelector('.gudongi-stage img').getAttribute('src')`),'/characters/gudongi/suit.png');
     await shot(`gudongi-max-${currentXp}`);
@@ -55,5 +82,5 @@ try{
   assert.equal(await evaluate(`document.activeElement.id`),'myLibraryTab');
   await evaluate(`document.querySelector('#myLibraryTab').dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true}))`);
   assert.equal(await evaluate(`document.activeElement.id`),'myGudongiTab');
-  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,output,checks:['1440/820/390 no overflow','rail spacing','appearance 3/2/1 columns','avatar crop/zoom/save/reload','appearance persistence','library tab','no browser exceptions','MAX labels','missing image fallback','keyboard tabs']},null,2));
+  assert.deepEqual(errors,[]);console.log(JSON.stringify({ok:true,output,checks:['1440/820/390 no overflow','rail spacing','appearance 3/2/1 columns','avatar crop/zoom/save/reload','appearance persistence','library tab','no browser exceptions','MAX labels','30 XP units with 8 filled','missing image fallback','keyboard tabs']},null,2));
 }finally{socket?.close();browser.kill();}
