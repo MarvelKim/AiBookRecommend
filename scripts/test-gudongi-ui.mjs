@@ -14,8 +14,10 @@ try{
   const evaluate=async expression=>{const r=await command('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(r.exceptionDetails.exception?.description||r.exceptionDetails.text);return r.result.value;};
   const shot=async name=>{const r=await command('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(path.join(output,name+'.png'),Buffer.from(r.data,'base64'));};
   await command('Runtime.enable');await command('Page.enable');await delay(1200);
+  assert.equal(await evaluate(`Math.round(document.querySelector('.hero').getBoundingClientRect().height)`),356);
   await evaluate(`(async()=>{await fetch('/api/account/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id:'preview-reader',password:'test-password'})});state.user='preview-reader';state.isAdmin=false;updateUserUI();await showView('library');await window.refreshMyInfo();document.querySelector('#myGudongiTab').click();})()`);await delay(350);
-  for(const file of ['baby','student','default','reading','jumping','safety-helmet','hearts','suit']){
+  assert.deepEqual(await evaluate(`(()=>{const s=getComputedStyle(document.querySelector('#headerGudongi'));return [s.paddingLeft,s.paddingRight]})()`),['9px','12px']);
+  for(const file of ['baby','student','default','reading','casual','jumping','safety-helmet','hearts','suit']){
     const bounds=await evaluate(`(async()=>{const img=document.querySelector('.header-gudongi-art img');img.src='/characters/gudongi/${file}.png';await img.decode();const a=img.getBoundingClientRect(),b=img.parentElement.getBoundingClientRect(),badge=document.querySelector('#headerGudongi').getBoundingClientRect();return {contained:a.left>=b.left&&a.right<=b.right&&a.top>=b.top&&a.bottom<=b.bottom,centerX:Math.abs((a.left+a.right-b.left-b.right)/2),centerY:Math.abs((a.top+a.bottom-b.top-b.bottom)/2),clip:{x:badge.x,y:badge.y,width:badge.width,height:badge.height,scale:3}}})()`);
     assert.equal(bounds.contained,true,`${file} badge image must not be clipped`);assert.ok(bounds.centerX<.1&&bounds.centerY<.1,`${file} image centered`);
     const capture=await command('Page.captureScreenshot',{format:'png',clip:bounds.clip});await writeFile(path.join(output,`badge-${file}.png`),Buffer.from(capture.data,'base64'));
@@ -37,8 +39,10 @@ try{
   if(process.argv.includes('--recommend-flow')){
     await evaluate(`(async()=>{await showView('curation');document.querySelectorAll('.chip').forEach(b=>b.classList.remove('selected'));document.querySelector('[data-group="jobs"]').classList.add('selected');document.querySelectorAll('[data-group="purposes"]')[4].classList.add('selected');document.querySelector('[data-field="level"]').value='\uC2E4\uBB34';document.querySelector('[data-field="freshness"]').value='\uBB34\uAD00';document.querySelector('[data-field="practical"]').value='\uBB34\uAD00';document.querySelector('#recommendButton').click()})()`);
     for(let i=0;i<100;i++){if(await evaluate(`!document.querySelector('#recommendButton').disabled`))break;await delay(100);}
+    assert.equal(await evaluate(`state.books.length`),60);
+    await evaluate(`document.querySelector('#bookGrid [data-favorite]').click()`);await delay(250);
     const earned=await evaluate(`(async()=>{const p=(await(await fetch('/api/account/gudongi')).json()).gudongi;return {xp:p.totalXp,used:p.quota.used,daily:p.quota.xp,books:state.books.length}})()`);
-    assert.deepEqual(earned,{xp:22,used:6,daily:1,books:6});
+    assert.deepEqual(earned,{xp:22,used:1,daily:1,books:60});
     await evaluate(`(async()=>{await showView('library');await window.refreshMyInfo();document.querySelector('#myGudongiTab').click()})()`);await delay(200);
     assert.equal(await evaluate(`document.querySelectorAll('.daily-stamps .is-earned').length`),1);
     assert.equal(await evaluate(`document.querySelectorAll('.xp-group').length`),5);
@@ -49,6 +53,10 @@ try{
       await evaluate(`document.querySelector('.gudongi-daily').scrollIntoView({block:'center',behavior:'instant'})`);await delay(150);await shot('daily-'+name);
       assert.equal(await evaluate(`document.documentElement.scrollWidth>innerWidth`),false);
     }
+    await evaluate(`(async()=>{await showView('curation');document.querySelector('#refreshButton').click()})()`);
+    for(let i=0;i<100;i++){if(await evaluate(`!document.querySelector('#recommendButton').disabled`))break;await delay(100);}
+    assert.equal(await evaluate(`state.offset`),6);
+    assert.deepEqual(await evaluate(`(async()=>{const p=(await(await fetch('/api/account/gudongi')).json()).gudongi;return [p.totalXp,p.quota.used,p.quota.xp]})()`),[22,1,1]);
     await evaluate(`(async()=>{await fetch('/__test/search/empty',{method:'POST'});await showView('curation');document.querySelector('#recommendButton').click()})()`);
     for(let i=0;i<100;i++){if(await evaluate(`!document.querySelector('#recommendButton').disabled`))break;await delay(100);}
     assert.equal(await evaluate(`document.querySelectorAll('#bookGrid .book-card').length`),0);

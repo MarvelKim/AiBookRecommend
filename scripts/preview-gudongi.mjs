@@ -9,7 +9,7 @@ const f=fixture(),publicRoot=fileURLToPath(new URL('../public/',import.meta.url)
 const port=Number(process.env.GUDONGI_PREVIEW_PORT||4186),mockSearch=process.argv.includes('--mock-search');let emptySearch=false;
 if(mockSearch)globalThis.fetch=async input=>{
   const url=new URL(typeof input==='string'?input:input.url||input);
-  if(url.hostname==='www.googleapis.com')return Response.json({items:emptySearch?[]:Array.from({length:6},(_,i)=>({id:String(i),volumeInfo:{title:`행정 기획 보고서 실무 ${i}`,description:'공공기관 행정 기획 보고서 실무 문제 해결',publishedDate:'2026-01-01',industryIdentifiers:[{type:'ISBN_13',identifier:`978000000000${i}`}],authors:['테스트 저자']}}))});
+  if(url.hostname==='www.googleapis.com')return Response.json({items:emptySearch?[]:Array.from({length:60},(_,i)=>({id:String(i),volumeInfo:{title:`행정 기획 보고서 실무 ${i}`,description:'공공기관 행정 기획 보고서 실무 문제 해결',publishedDate:'2026-01-01',industryIdentifiers:[{type:'ISBN_13',identifier:`978000000000${i}`}],authors:['테스트 저자']}}))});
   return new Response('',{status:503});
 };
 await f.login('preview-reader');await f.board();

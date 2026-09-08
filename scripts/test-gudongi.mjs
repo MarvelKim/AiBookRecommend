@@ -35,21 +35,25 @@ await f.internal('/admin/challenges/posts/progress',{postId:firstData.postId,ach
 await f.api('/api/account/seen',{level:999},cookie);assert.equal((await profile()).lastSeenLevel,2);
 await f.internal('/admin/challenges/posts/delete',{postId:firstData.postId,adminId:'admin'});assert.equal((await profile()).totalXp,0);assert.equal((await profile()).appearanceId,'baby');assert.ok(f.sql.exec('SELECT * FROM gudongi_audit').length>=4);
 
-const delivery=(id,count=1,userId='reader')=>f.internal('/gudongi/recommendation/deliver',{userId,requestId:id,fingerprint:'same-profile',profile:{jobs:['행정·기획']},result:{books:Array.from({length:count},(_,i)=>({title:`도서 ${i}`,isbn:`isbn-${i}`}))}});
+const delivery=(id,count=1,userId='reader')=>f.internal('/gudongi/recommendation/deliver',{userId,requestId:id,fingerprint:'same-profile',profile:{jobs:['행정·기획']},result:{books:Array.from({length:count},(_,i)=>({title:`도서 ${i}`,isbn:`isbn-${id}-${i}`}))}});
 const empty=await (await delivery('empty-result',0)).json();assert.equal(empty.earnedXp,0);assert.equal(empty.quota.used,0);
-for(let i=0;i<5;i++){const data=await (await delivery(`one-book-${i}`)).json();assert.equal(data.earnedXp,i<4?1:0);}
-assert.equal((await profile()).totalXp,4);assert.equal((await profile()).quota.used,5);
-const repeated=await Promise.all(Array.from({length:8},()=>delivery('same-request',8)));assert.equal((await profile()).quota.used,13);assert.equal(repeated.filter(r=>r.status===200).length,8);assert.equal(f.sql.exec('SELECT COUNT(*) n FROM gudongi_deliveries')[0].n,6);
-const raced=await Promise.all([delivery('race-request-1',14),delivery('race-request-2',14)]),racedData=await Promise.all(raced.map(r=>r.json()));assert.deepEqual(racedData.map(r=>r.books.length).sort((a,b)=>a-b),[3,14]);assert.equal((await profile()).quota.used,30);
-assert.equal((await delivery('over-limit',1)).status,429);assert.equal((await delivery('same-request',8)).status,200);assert.equal((await profile()).totalXp,4);
+const unlimited=await (await delivery('sixty-results',60)).json();assert.equal(unlimited.books.length,60);assert.equal(unlimited.earnedXp,0);assert.equal((await profile()).totalXp,0);assert.equal((await profile()).quota.used,0);
+const repeated=await Promise.all(Array.from({length:8},()=>delivery('same-request',60)));assert.equal(repeated.filter(r=>r.status===200).length,8);assert.equal((await repeated[0].clone().json()).books.length,60);assert.equal(f.sql.exec('SELECT COUNT(*) n FROM gudongi_deliveries')[0].n,2);
 assert.equal((await f.internal('/gudongi/recommendation/check',{userId:'reader',requestId:'same-request',fingerprint:'tampered'})).status,409);
 assert.equal((await f.api('/api/account/recommendations/log',{bookCount:10000,totalXp:9999},cookie)).status,410);
+const favorite=(id,saved=true,userCookie=cookie,userId='reader')=>f.api('/api/favorite',{userId:`account:${userId}`,saved,book:{title:`서재 도서 ${id}`,isbn:`shelf-${id}`,authors:['테스트 저자']}},userCookie);
+for(let i=0;i<5;i++){const response=await favorite(i),data=await response.json();assert.equal(response.status,200);assert.equal(data.earnedXp,i<4?1:0);assert.equal(data.quota.used,i+1);}
+assert.equal((await profile()).totalXp,4);assert.equal((await profile()).quota.used,5);assert.equal((await profile()).quota.xp,4);
+const duplicate=await (await favorite(0)).json();assert.equal(duplicate.newlyAdded,false);assert.equal(duplicate.earnedXp,0);assert.equal(duplicate.quota.used,5);
+await favorite(0,false);const readded=await(await favorite(0)).json();assert.equal(readded.newlyAdded,true);assert.equal(readded.earnedXp,0);assert.equal(readded.quota.used,5);
+for(let i=5;i<30;i++)assert.equal((await favorite(i)).status,200);
+assert.equal((await profile()).quota.used,30);assert.equal((await favorite(30)).status,429);assert.equal((await delivery('still-unlimited-after-shelf-limit',60)).status,200);
 const nextMidnight=Date.parse((await profile()).quota.resetAt);assert.equal(quota(f.sql,'reader',nextMidnight).used,0);assert.equal(quota(f.sql,'reader',nextMidnight).xp,0);
 
-// Roll back the whole new recommendation when a later ledger write fails.
-const originalExec=f.sql.exec;f.sql.exec=function(query,...args){if(query.startsWith('INSERT INTO gudongi_deliveries'))throw new Error('injected write failure');return originalExec(query,...args);};
-await assert.rejects(()=>delivery('failing-transaction',1,'other-reader'),/injected/);f.sql.exec=originalExec;
-assert.equal(f.sql.exec("SELECT COUNT(*) n FROM recommendation_sessions WHERE user_id='other-reader'")[0].n,0);assert.equal(gudongiProfile(f.sql,'other-reader').totalXp,0);
+// Roll back the EXP ledger and daily count when saving the favorite fails.
+const originalExec=f.sql.exec;f.sql.exec=function(query,...args){if(query.startsWith('INSERT INTO favorites'))throw new Error('injected write failure');return originalExec(query,...args);};
+await assert.rejects(()=>f.internal('/favorite',{userId:'account:other-reader',saved:true,book:{title:'실패 도서',isbn:'failed-book'}}),/injected/);f.sql.exec=originalExec;
+assert.equal(f.sql.exec("SELECT COUNT(*) n FROM gudongi_library_additions WHERE user_id='other-reader'")[0].n,0);assert.equal(gudongiProfile(f.sql,'other-reader').totalXp,0);
 
 for(const [body,status] of [[{currentPassword:'wrong-password',newPassword:'new-password',confirmPassword:'new-password'},403],[{currentPassword:'test-password',newPassword:'short',confirmPassword:'short'},400],[{currentPassword:'test-password',newPassword:'test-password',confirmPassword:'test-password'},400],[{currentPassword:'test-password',newPassword:'new-password',confirmPassword:'mismatch'},400]])assert.equal((await f.api('/api/account/password',body,cookie)).status,status);
 assert.equal((await f.api('/api/account/password',{currentPassword:'test-password',newPassword:'new-password',confirmPassword:'new-password'},cookie)).status,200);
@@ -71,5 +75,5 @@ const attached=await f.api('/api/challenges/test-board/posts',attachmentForm,coo
 const retryForm=makePost('attachments-request',1);retryForm.append('files',new Blob([new Uint8Array([137,80,78,71,13,10,26,10,0])],{type:'image/png'}),'sample.png');assert.equal((await f.api('/api/challenges/test-board/posts',retryForm,cookie)).status,200);assert.equal(f.objects.size,1);
 await f.internal('/admin/challenges/boards/delete',{id:'test-board',adminId:'admin'});assert.equal((await profile()).totalXp,4);assert.equal(f.sql.exec('SELECT COUNT(*) n FROM challenge_posts WHERE post_id=?',attachedData.postId)[0].n,0);
 assert.equal((await f.api('/api/account/delete',{password:'new-password'},cookie)).status,200);
-for(const table of ['gudongi_profiles','gudongi_xp','gudongi_deliveries','gudongi_audit'])assert.equal(f.sql.exec(`SELECT COUNT(*) n FROM ${table} WHERE user_id=?`,'reader')[0].n,0);
-console.log('구동이: 레벨·소수 EXP·중복·동시 추천 한도·원자성·소급 보존·인증·계정 설정 회귀 테스트 통과');
+for(const table of ['gudongi_profiles','gudongi_xp','gudongi_deliveries','gudongi_library_additions','gudongi_audit'])assert.equal(f.sql.exec(`SELECT COUNT(*) n FROM ${table} WHERE user_id=?`,'reader')[0].n,0);
+console.log('구동이: 레벨·소수 EXP·서재 30권/4 EXP·중복·원자성·소급 보존·인증·계정 설정 회귀 테스트 통과');

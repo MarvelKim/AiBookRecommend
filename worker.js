@@ -1,4 +1,4 @@
-import { createGudongiSchema, handleGudongiRequest } from './gudongi-store.js';
+import { createGudongiSchema, gudongiProfile, handleGudongiRequest, recordLibraryAddition } from './gudongi-store.js';
 import {createChallengeSchema,deleteChallengeAccountData,handleChallengeStoreRequest} from './challenge-store.js';
 
 const JOB_TREE={
@@ -298,10 +298,16 @@ export class RankingStore {
     if(request.method==='POST'&&url.pathname==='/favorite'){
       const body=await request.json(),userId=String(body.userId||'').slice(0,128),book=body.book||{},key=String(book.isbn||book.title||'').slice(0,200);
       if(!userId||!key||!book.title)return json({error:'필수 정보가 없습니다.'},400);
-      const registryId=userId.startsWith('account:')?managedUserId(userId.slice(8)):'';if(registryId){const now=Math.floor(Date.now()/1000);this.sql.exec('INSERT INTO user_registry(user_id,created_at,last_seen_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET last_seen_at=excluded.last_seen_at',registryId,now,now);}
-      if(body.saved)this.sql.exec(`INSERT INTO favorites(user_id,book_key,title,authors,publisher,published_date,isbn,thumbnail,item_type,doi,landing_url,match_score) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,book_key) DO UPDATE SET title=excluded.title,authors=excluded.authors,publisher=excluded.publisher,published_date=excluded.published_date,isbn=excluded.isbn,thumbnail=excluded.thumbnail,item_type=excluded.item_type,doi=excluded.doi,landing_url=excluded.landing_url,match_score=excluded.match_score`,userId,key,String(book.title).slice(0,300),JSON.stringify(book.authors||[]),String(book.publisher||'').slice(0,200),String(book.publishedDate||book.year||'').slice(0,30),String(book.isbn||'').slice(0,20),String(book.thumbnail||'').slice(0,1000),book.type==='paper'?'paper':'book',String(book.doi||'').slice(0,500),String(book.landingUrl||'').slice(0,1000),Math.max(0,Math.min(100,Number(book.match)||0)));
-      else this.sql.exec('DELETE FROM favorites WHERE user_id=? AND book_key=?',userId,key);
-      return json({ok:true});
+      return this.transaction(()=>{
+        const registryId=userId.startsWith('account:')?managedUserId(userId.slice(8)):'',member=registryId&&[...this.sql.exec('SELECT 1 AS found FROM accounts WHERE user_id=?',registryId)][0],existing=[...this.sql.exec('SELECT 1 AS found FROM favorites WHERE user_id=? AND book_key=?',userId,key)][0];
+        if(registryId){const now=Math.floor(Date.now()/1000);this.sql.exec('INSERT INTO user_registry(user_id,created_at,last_seen_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET last_seen_at=excluded.last_seen_at',registryId,now,now);}
+        let reward=null;
+        if(body.saved&&!existing&&member){reward=recordLibraryAddition(this.sql,registryId,key);if(reward.limited)return json({error:'오늘은 나의 서재에 30권을 모두 추가했어요. 한국 시간 자정부터 다시 추가할 수 있어요.',code:'DAILY_LIBRARY_LIMIT',quota:reward.quota},429);}
+        if(body.saved)this.sql.exec(`INSERT INTO favorites(user_id,book_key,title,authors,publisher,published_date,isbn,thumbnail,item_type,doi,landing_url,match_score) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,book_key) DO UPDATE SET title=excluded.title,authors=excluded.authors,publisher=excluded.publisher,published_date=excluded.published_date,isbn=excluded.isbn,thumbnail=excluded.thumbnail,item_type=excluded.item_type,doi=excluded.doi,landing_url=excluded.landing_url,match_score=excluded.match_score`,userId,key,String(book.title).slice(0,300),JSON.stringify(book.authors||[]),String(book.publisher||'').slice(0,200),String(book.publishedDate||book.year||'').slice(0,30),String(book.isbn||'').slice(0,20),String(book.thumbnail||'').slice(0,1000),book.type==='paper'?'paper':'book',String(book.doi||'').slice(0,500),String(book.landingUrl||'').slice(0,1000),Math.max(0,Math.min(100,Number(book.match)||0)));
+        else this.sql.exec('DELETE FROM favorites WHERE user_id=? AND book_key=?',userId,key);
+        const profile=member?(reward?.gudongi||gudongiProfile(this.sql,registryId)):null;
+        return json({ok:true,saved:Boolean(body.saved),newlyAdded:Boolean(body.saved&&!existing),earnedXp:Number(reward?.earnedXp||0),gudongi:profile,quota:profile?.quota||null});
+      });
     }
     if(request.method==='GET'&&url.pathname==='/shelf'){
       const userId=String(url.searchParams.get('userId')||'').slice(0,120),rows=[...this.sql.exec('SELECT title,authors,publisher,published_date,isbn,thumbnail,item_type,doi,landing_url,match_score FROM favorites WHERE user_id=? ORDER BY created_at DESC',userId)];
@@ -498,6 +504,7 @@ export default {
         const requested=String(url.searchParams.get('userId')||''),targetUser=requested.startsWith('account:')?managedUserId(requested.slice(8)):'',sessionUser=await userFromSession(request,env),allowed=targetUser===ADMIN_ID?await validAdminSession(request,env):requested===`account:${sessionUser}`;if(requested.startsWith('account:')&&!allowed)return json({error:'로그인이 필요합니다.'},401);const target=new URL('https://rankings.internal/shelf');target.searchParams.set('userId',requested);return rankingStub(env).fetch(new Request(target));
       }
       if(url.pathname==='/api/favorite'&&request.method==='POST'){
+        if(!sameOrigin(request))return json({error:'허용되지 않은 요청입니다.'},403);
         const body=await request.json(),requested=String(body.userId||''),targetUser=requested.startsWith('account:')?managedUserId(requested.slice(8)):'',sessionUser=await userFromSession(request,env),allowed=targetUser===ADMIN_ID?await validAdminSession(request,env):requested===`account:${sessionUser}`;if(requested.startsWith('account:')&&!allowed)return json({error:'로그인이 필요합니다.'},401);return rankingStub(env).fetch(new Request('https://rankings.internal/favorite',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}));
       }
       if(request.method==='POST'&&url.pathname==='/api/recommend'){

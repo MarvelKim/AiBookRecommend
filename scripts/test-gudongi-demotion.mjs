@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import { fixture } from './gudongi-test-fixture.mjs';
+const f=fixture(),cookie=await f.login();await f.board();
+const profile=async()=>(await(await f.api('/api/account/gudongi',null,cookie)).json()).gudongi;
+await f.internal('/challenges/posts',{postId:'base',boardId:'test-board',authorId:'reader',title:'base',body:'baseline',achievement:14});
+for(let i=0;i<2;i++)await f.api('/api/favorite',{userId:'account:reader',saved:true,book:{title:`book ${i}`,isbn:`isbn-${i}`}},cookie);
+await f.internal('/challenges/posts',{postId:'duplicate',boardId:'test-board',authorId:'reader',title:'duplicate',body:'remove this',achievement:1});
+assert.equal((await profile()).totalXp,47);assert.equal((await profile()).level,4);assert.equal((await profile()).currentXp,2);
+assert.equal((await f.api('/api/account/appearance',{appearanceId:'jumping'},cookie)).status,200);
+await f.api('/api/account/seen',{level:4},cookie);
+assert.equal((await f.internal('/admin/challenges/posts/delete',{postId:'duplicate',adminId:'admin'})).status,200);
+const lowered=await profile();assert.equal(lowered.totalXp,44);assert.equal(lowered.level,3);assert.equal(lowered.currentXp,29);assert.equal(lowered.appearanceId,'default');assert.equal(lowered.lastSeenLevel,3);
+assert.ok(lowered.appearanceCatalog.filter(a=>a.level>=4).every(a=>!a.unlocked));
+for(const appearanceId of ['casual','jumping','suit','safety-helmet','hearts'])assert.equal((await f.api('/api/account/appearance',{appearanceId},cookie)).status,403);
+assert.equal((await f.internal('/admin/challenges/posts/delete',{postId:'duplicate',adminId:'admin'})).status,404);assert.equal((await profile()).totalXp,44);
+await f.internal('/challenges/posts',{postId:'new-valid',boardId:'test-board',authorId:'reader',title:'valid',body:'new activity',achievement:1});
+assert.equal((await profile()).level,4);assert.equal((await profile()).levelUp,true);assert.equal((await profile()).appearanceId,'casual');
+console.log('Admin deletion: LV4 2/50 -> LV3 29/30, relocking and re-unlocking passed');

@@ -4,7 +4,7 @@ export const APPEARANCES = [
   {id:'student',name:'학생 구동이',kind:'basic',level:2,image:'student.png',scale:.8},
   {id:'default',kind:'basic',name:'구동이',level:3,image:'default.png',scale:1},
   {id:'reading',kind:'bonus',name:'책 읽는 구동이',level:3,image:'reading.png',scale:1},
-  {id:'casual',kind:'basic',name:'일상 구동이',level:4,image:null,scale:1},
+  {id:'casual',kind:'basic',name:'현장실무 구동이',level:4,image:'casual.png',scale:1},
   {id:'jumping',kind:'bonus',name:'방방 뛰는 구동이',level:4,image:'jumping.png',scale:1},
   {id:'suit',kind:'basic',name:'정장 구동이',level:5,image:'suit.png',scale:1},
   {id:'safety-helmet',kind:'bonus',name:'안전모 구동이',level:5,image:'safety-helmet.png',scale:1},
@@ -26,6 +26,8 @@ export function createGudongiSchema(sql){
     CREATE INDEX IF NOT EXISTS gudongi_xp_user ON gudongi_xp(user_id,earned_date,source_type);
     CREATE TABLE IF NOT EXISTS gudongi_deliveries(user_id TEXT NOT NULL,request_id TEXT NOT NULL,fingerprint TEXT NOT NULL,earned_date TEXT NOT NULL,book_count INTEGER NOT NULL,result_json TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(user_id,request_id));
     CREATE INDEX IF NOT EXISTS gudongi_deliveries_day ON gudongi_deliveries(user_id,earned_date);
+    CREATE TABLE IF NOT EXISTS gudongi_library_additions(user_id TEXT NOT NULL,earned_date TEXT NOT NULL,book_key TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(user_id,earned_date,book_key));
+    CREATE INDEX IF NOT EXISTS gudongi_library_additions_day ON gudongi_library_additions(user_id,earned_date);
     CREATE TABLE IF NOT EXISTS gudongi_migrations(version TEXT PRIMARY KEY,created_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS gudongi_audit(audit_id INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT NOT NULL,source_id TEXT NOT NULL,action TEXT NOT NULL,before_value TEXT NOT NULL,after_value TEXT NOT NULL,created_at INTEGER NOT NULL);
     CREATE TRIGGER IF NOT EXISTS gudongi_challenge_insert AFTER INSERT ON challenge_posts BEGIN
@@ -45,6 +47,9 @@ export function createGudongiSchema(sql){
       DELETE FROM gudongi_deliveries WHERE user_id=OLD.user_id;
       DELETE FROM gudongi_audit WHERE user_id=OLD.user_id;
     END;
+    CREATE TRIGGER IF NOT EXISTS gudongi_account_delete_library_v2 AFTER DELETE ON accounts BEGIN
+      DELETE FROM gudongi_library_additions WHERE user_id=OLD.user_id;
+    END;
   `);
   // One-time, idempotent backfill. Historical books do NOT consume the new quota.
   if(!row(sql,"SELECT version FROM gudongi_migrations WHERE version='v1'")){
@@ -54,8 +59,17 @@ export function createGudongiSchema(sql){
   }
 }
 export function quota(sql,userId,now=Date.now()){
-  const day=seoulDay(now),used=Number(row(sql,'SELECT COALESCE(SUM(book_count),0) AS n FROM gudongi_deliveries WHERE user_id=? AND earned_date=?',userId,day).n),xp=Number(row(sql,"SELECT COALESCE(SUM(xp_amount),0) AS n FROM gudongi_xp WHERE user_id=? AND earned_date=? AND source_type='recommendation'",userId,day).n);
+  const day=seoulDay(now),used=Number(row(sql,'SELECT COUNT(*) AS n FROM gudongi_library_additions WHERE user_id=? AND earned_date=?',userId,day).n),xp=Number(row(sql,"SELECT COALESCE(SUM(xp_amount),0) AS n FROM gudongi_xp WHERE user_id=? AND earned_date=? AND source_type IN ('library','recommendation')",userId,day).n);
   return {day,used,limit:30,remaining:Math.max(0,30-used),xp,remainingXp:Math.max(0,4-xp),resetAt:new Date(Date.parse(`${day}T00:00:00+09:00`)+86400000).toISOString()};
+}
+export function recordLibraryAddition(sql,userId,bookKey,now=Date.now()){
+  const q=quota(sql,userId,now),existing=row(sql,'SELECT 1 AS found FROM gudongi_library_additions WHERE user_id=? AND earned_date=? AND book_key=?',userId,q.day,bookKey);
+  if(existing)return {counted:false,earnedXp:0,gudongi:gudongiProfile(sql,userId),quota:q};
+  if(q.remaining<=0)return {limited:true,counted:false,earnedXp:0,quota:q};
+  const createdAt=Math.floor(now/1000),earnedXp=q.remainingXp>0?1:0;
+  sql.exec('INSERT INTO gudongi_library_additions VALUES(?,?,?,?)',userId,q.day,bookKey,createdAt);
+  if(earnedXp)sql.exec("INSERT OR IGNORE INTO gudongi_xp VALUES('library',?,?,1,?,?)",`library:${userId}:${q.day}:${bookKey}`,userId,q.day,createdAt);
+  return {counted:true,earnedXp,gudongi:gudongiProfile(sql,userId),quota:quota(sql,userId,now)};
 }
 export function gudongiProfile(sql,userId){
   sql.exec('INSERT OR IGNORE INTO gudongi_profiles(user_id) VALUES(?)',userId);
@@ -63,23 +77,23 @@ export function gudongiProfile(sql,userId){
   let appearanceId=saved.appearance_id;
   if(g.level>saved.last_level||!selected||selected.level>g.level)appearanceId=defaults[g.level-1];
   if(appearanceId!==saved.appearance_id){sql.exec('INSERT INTO gudongi_audit(user_id,source_id,action,before_value,after_value,created_at) VALUES(?,?,?,?,?,unixepoch())',userId,'profile','appearance_auto',saved.appearance_id,appearanceId);}
+  if(g.level<saved.last_level){sql.exec('UPDATE gudongi_profiles SET last_seen_level=MIN(last_seen_level,?) WHERE user_id=?',g.level,userId);saved.last_seen_level=Math.min(saved.last_seen_level,g.level);}
   sql.exec('UPDATE gudongi_profiles SET appearance_id=?,last_level=? WHERE user_id=?',appearanceId,g.level,userId);
   return {...g,userId,appearanceId,appearance:APPEARANCES.find(item=>item.id===appearanceId),appearances:APPEARANCES.filter(item=>item.level<=g.level),appearanceCatalog:APPEARANCES.map(item=>({...item,unlocked:item.level<=g.level})),unlockedCount:APPEARANCES.filter(item=>item.level<=g.level).length,avatar:saved.avatar_data,lastSeenLevel:saved.last_seen_level,levelUp:g.level>saved.last_seen_level,quota:quota(sql,userId)};
 }
 export function recommendationLookup(sql,userId,requestId,fingerprint){
   const saved=row(sql,'SELECT * FROM gudongi_deliveries WHERE user_id=? AND request_id=?',userId,requestId);
   if(saved){if(saved.fingerprint!==fingerprint)return json({error:'같은 요청 번호로 조건을 변경할 수 없습니다.'},409);return json({...JSON.parse(saved.result_json),replayed:true,gudongi:gudongiProfile(sql,userId),quota:quota(sql,userId)});}
-  const q=quota(sql,userId);return q.remaining?null:json({error:'오늘의 추천 30권을 모두 이용했어요. 한국 시간 자정에 다시 만나요.',quota:q,code:'DAILY_LIMIT'},429);
+  return null;
 }
 export function deliverRecommendation(sql,body){
   const {userId,requestId,fingerprint}=body,cached=recommendationLookup(sql,userId,requestId,fingerprint);if(cached)return cached;
-  const before=gudongiProfile(sql,userId),q=before.quota,seen=new Set(),books=(body.result.books||[]).filter(book=>{const key=book.isbn||book.doi||book.title;if(!key||!book.title||seen.has(key))return false;seen.add(key);return true;}).slice(0,q.remaining),earnedXp=books.length&&q.remainingXp>0?1:0;
+  const before=gudongiProfile(sql,userId),q=before.quota,seen=new Set(),books=(body.result.books||[]).filter(book=>{const key=book.isbn||book.doi||book.title;if(!key||!book.title||seen.has(key))return false;seen.add(key);return true;}).slice(0,60);
   if(!books.length)return json({...body.result,books:[],earnedXp:0,gudongi:before,quota:q});
   const now=Math.floor(Date.now()/1000),sessionId=crypto.randomUUID();
   sql.exec('INSERT INTO recommendation_sessions(user_id,book_count,profile_json,created_at) VALUES(?,?,?,?)',userId,books.length,JSON.stringify(body.profile),now);
   sql.exec('UPDATE accounts SET recommendation_requests=recommendation_requests+1,recommended_book_count=recommended_book_count+?,last_recommended_at=? WHERE user_id=?',books.length,now,userId);
-  if(earnedXp)sql.exec("INSERT INTO gudongi_xp VALUES('recommendation',?,?,1,?,?)",sessionId,userId,q.day,now);
-  const result={...body.result,books,sessionId,earnedXp,levelUp:growth(before.totalXp+earnedXp).level>before.level};
+  const result={...body.result,books,sessionId,earnedXp:0,levelUp:false};
   sql.exec('INSERT INTO gudongi_deliveries VALUES(?,?,?,?,?,?,?)',userId,requestId,fingerprint,q.day,books.length,JSON.stringify(result),now);
   return json({...result,gudongi:gudongiProfile(sql,userId),quota:quota(sql,userId)});
 }
