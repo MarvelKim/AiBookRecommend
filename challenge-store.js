@@ -1,3 +1,4 @@
+import { gudongiProfile } from './gudongi-store.js';
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
 const text=(value,max=2000)=>String(value??'').trim().slice(0,max);
 const id=(value='')=>String(value).trim().slice(0,80);
@@ -117,7 +118,12 @@ export function deleteChallengeAccountData(sql,userId){
   return keys;
 }
 
-export async function handleChallengeStoreRequest(sql,request,url=new URL(request.url)){
+export async function handleChallengeStoreRequest(sql,request,url=new URL(request.url),transaction=fn=>fn()){
+  if(!url.pathname.startsWith('/challenges/')&&!url.pathname.startsWith('/admin/challenges/'))return null;
+  const body=request.method==='POST'?await request.json():null;
+  return transaction(()=>handleChallengeStoreSync(sql,{method:request.method,json:()=>body},url));
+}
+function handleChallengeStoreSync(sql,request,url){
   const path=url.pathname;
   if(!path.startsWith('/challenges/')&&!path.startsWith('/admin/challenges/'))return null;
 
@@ -146,48 +152,50 @@ export async function handleChallengeStoreRequest(sql,request,url=new URL(reques
   }
 
   if(request.method==='POST'&&path==='/challenges/posts'){
-    const body=await request.json(),rawTitle=String(body.title??'').trim(),rawBody=String(body.body??'').trim(),postId=id(body.postId),boardId=id(body.boardId),authorId=id(body.authorId),board=getBoard(sql,boardId),title=text(rawTitle,200),postBody=text(rawBody,20000),achievement=numberInRange(body.achievement,0,1000000),attachments=Array.isArray(body.attachments)?body.attachments.slice(0,10):[];
+    const body=request.json(),rawTitle=String(body.title??'').trim(),rawBody=String(body.body??'').trim(),postId=id(body.postId),boardId=id(body.boardId),authorId=id(body.authorId),board=getBoard(sql,boardId),title=text(rawTitle,200),postBody=text(rawBody,20000),achievement=numberInRange(body.achievement,0,1000000),attachments=Array.isArray(body.attachments)?body.attachments.slice(0,10):[];
     if(rawTitle.length>200||rawBody.length>20000)return json({error:'제목은 200자, 본문은 20,000자까지 입력할 수 있습니다.'},400);
     if(!postId||!board||!authorId||title.length<2||!postBody||achievement===null)return json({error:'게시글 입력 정보를 확인해 주세요.'},400);
+    const existing=getPost(sql,postId);if(existing){if(existing.author_id!==authorId||existing.board_id!==boardId||existing.title!==title||existing.body!==postBody||Number(existing.achievement)!==achievement)return json({error:'같은 요청 번호의 기록이 이미 있습니다.'},409);return json({ok:true,postId,replayed:true,achievement:Number(existing.achievement),earnedXp:0,gudongi:gudongiProfile(sql,authorId)});}
+    const before=gudongiProfile(sql,authorId);
     if(boardStatus(board)!=='active')return json({error:'현재 글을 등록할 수 없는 챌린지입니다.'},409);
     if(!allowAction(sql,authorId,'post',10))return json({error:'게시글 등록 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.'},429);
     const now=Math.floor(Date.now()/1000);sql.exec('INSERT INTO challenge_posts(post_id,board_id,author_id,title,body,achievement,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',postId,boardId,authorId,title,postBody,achievement,now,now);sql.exec('INSERT INTO user_registry(user_id,created_at,last_seen_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET last_seen_at=excluded.last_seen_at',authorId,now,now);
     for(const item of attachments){const attachmentId=id(item.id),key=text(item.key,300),name=text(item.name,180),mime=text(item.mime,100),size=numberInRange(item.size,1,10485760);if(!attachmentId||!key||!name||!mime||size===null)continue;sql.exec('INSERT INTO challenge_attachments(attachment_id,post_id,storage_key,original_name,mime_type,file_size,created_at) VALUES(?,?,?,?,?,?,?)',attachmentId,postId,key,name,mime,size,now);}
-    return json({ok:true,postId},201);
+    const gudongi=gudongiProfile(sql,authorId);return json({ok:true,postId,achievement,earnedXp:achievement*3,totalXp:gudongi.totalXp,level:gudongi.level,levelUp:gudongi.level>before.level,gudongi},201);
   }
 
   if(request.method==='POST'&&path==='/challenges/comments'){
-    const body=await request.json(),rawComment=String(body.body??'').trim(),postId=id(body.postId),authorId=id(body.authorId),commentBody=text(rawComment,2000),post=getPost(sql,postId),board=post?getBoard(sql,post.board_id):null;
+    const body=request.json(),rawComment=String(body.body??'').trim(),postId=id(body.postId),authorId=id(body.authorId),commentBody=text(rawComment,2000),post=getPost(sql,postId),board=post?getBoard(sql,post.board_id):null;
     if(rawComment.length>2000)return json({error:'댓글은 2,000자까지 입력할 수 있습니다.'},400);
     if(!post||!board)return json({error:'게시글을 찾지 못했습니다.'},404);if(!authorId||!commentBody)return json({error:'댓글 내용을 입력해 주세요.'},400);if(boardStatus(board)!=='active')return json({error:'종료된 챌린지에는 댓글을 등록할 수 없습니다.'},409);if(!allowAction(sql,authorId,'comment',30))return json({error:'댓글 등록 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.'},429);
     const commentId=crypto.randomUUID(),now=Math.floor(Date.now()/1000);sql.exec('INSERT INTO challenge_comments(comment_id,post_id,author_id,comment_body,created_at) VALUES(?,?,?,?,?)',commentId,postId,authorId,commentBody,now);return json({ok:true,comment:{id:commentId,authorId,body:commentBody,createdAt:now}},201);
   }
 
   if(request.method==='POST'&&path==='/admin/challenges/boards/save'){
-    const body=await request.json(),input=boardInput(body);if(input.error)return json(input,400);const now=Math.floor(Date.now()/1000),boardId=id(body.id)||crypto.randomUUID(),existing=getBoard(sql,boardId),status=body.status==='archived'||(!Object.hasOwn(body,'status')&&existing?.status==='archived')?'archived':'active';
+    const body=request.json(),input=boardInput(body);if(input.error)return json(input,400);const now=Math.floor(Date.now()/1000),boardId=id(body.id)||crypto.randomUUID(),existing=getBoard(sql,boardId),status=body.status==='archived'||(!Object.hasOwn(body,'status')&&existing?.status==='archived')?'archived':'active';
     if(existing)sql.exec('UPDATE challenge_boards SET name=?,board_type=?,description=?,title_prompt=?,body_prompt=?,start_date=?,end_date=?,target_amount=?,target_unit=?,status=?,updated_at=? WHERE board_id=?',input.name,input.type,input.description,input.titlePrompt,input.bodyPrompt,input.startDate,input.endDate,input.target,input.unit,status,now,boardId);
     else sql.exec('INSERT INTO challenge_boards(board_id,name,board_type,description,title_prompt,body_prompt,start_date,end_date,target_amount,target_unit,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',boardId,input.name,input.type,input.description,input.titlePrompt,input.bodyPrompt,input.startDate,input.endDate,input.target,input.unit,status,now,now);
     sql.exec('INSERT INTO challenge_audit_logs(admin_id,target_type,target_id,action_name,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?)',id(body.adminId)||'admin','board',boardId,existing?'update':'create',existing?JSON.stringify(boardDto(existing)):'',JSON.stringify({...input,status}),now);return json({ok:true,board:boardDto(getBoard(sql,boardId))},existing?200:201);
   }
 
   if(request.method==='POST'&&path==='/admin/challenges/boards/archive'){
-    const body=await request.json(),boardId=id(body.id),board=getBoard(sql,boardId);if(!board)return json({error:'게시판을 찾지 못했습니다.'},404);const status=body.archived===false?'active':'archived',now=Math.floor(Date.now()/1000);sql.exec('UPDATE challenge_boards SET status=?,updated_at=? WHERE board_id=?',status,now,boardId);sql.exec('INSERT INTO challenge_audit_logs(admin_id,target_type,target_id,action_name,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?)',id(body.adminId)||'admin','board',boardId,status==='archived'?'archive':'restore',JSON.stringify(boardDto(board)),JSON.stringify(boardDto(getBoard(sql,boardId))),now);return json({ok:true,board:boardDto(getBoard(sql,boardId))});
+    const body=request.json(),boardId=id(body.id),board=getBoard(sql,boardId);if(!board)return json({error:'게시판을 찾지 못했습니다.'},404);const status=body.archived===false?'active':'archived',now=Math.floor(Date.now()/1000);sql.exec('UPDATE challenge_boards SET status=?,updated_at=? WHERE board_id=?',status,now,boardId);sql.exec('INSERT INTO challenge_audit_logs(admin_id,target_type,target_id,action_name,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?)',id(body.adminId)||'admin','board',boardId,status==='archived'?'archive':'restore',JSON.stringify(boardDto(board)),JSON.stringify(boardDto(getBoard(sql,boardId))),now);return json({ok:true,board:boardDto(getBoard(sql,boardId))});
   }
 
   if(request.method==='POST'&&path==='/admin/challenges/boards/delete'){
-    const body=await request.json(),boardId=id(body.id),board=getBoard(sql,boardId);if(!board)return json({error:'게시판을 찾지 못했습니다.'},404);const postIds=[...sql.exec('SELECT post_id FROM challenge_posts WHERE board_id=?',boardId)].map(row=>row.post_id),keys=[];for(const postId of postIds)keys.push(...deletePostData(sql,postId));const now=Math.floor(Date.now()/1000);sql.exec('DELETE FROM challenge_boards WHERE board_id=?',boardId);sql.exec('INSERT INTO challenge_audit_logs(admin_id,target_type,target_id,action_name,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?)',id(body.adminId)||'admin','board',boardId,'delete',JSON.stringify(boardDto(board)),'',now);return json({ok:true,attachmentKeys:keys});
+    const body=request.json(),boardId=id(body.id),board=getBoard(sql,boardId);if(!board)return json({error:'게시판을 찾지 못했습니다.'},404);const postIds=[...sql.exec('SELECT post_id FROM challenge_posts WHERE board_id=?',boardId)].map(row=>row.post_id),keys=[];for(const postId of postIds)keys.push(...deletePostData(sql,postId));const now=Math.floor(Date.now()/1000);sql.exec('DELETE FROM challenge_boards WHERE board_id=?',boardId);sql.exec('INSERT INTO challenge_audit_logs(admin_id,target_type,target_id,action_name,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?)',id(body.adminId)||'admin','board',boardId,'delete',JSON.stringify(boardDto(board)),'',now);return json({ok:true,attachmentKeys:keys});
   }
 
   if(request.method==='POST'&&path==='/admin/challenges/posts/progress'){
-    const body=await request.json(),postId=id(body.postId),post=getPost(sql,postId),achievement=numberInRange(body.achievement,0,1000000);if(!post)return json({error:'게시글을 찾지 못했습니다.'},404);if(achievement===null)return json({error:'달성량을 확인해 주세요.'},400);const now=Math.floor(Date.now()/1000);sql.exec('UPDATE challenge_posts SET achievement=?,updated_at=? WHERE post_id=?',achievement,now,postId);sql.exec('INSERT INTO challenge_audit_logs(admin_id,target_type,target_id,action_name,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?)',id(body.adminId)||'admin','post',postId,'progress_update',JSON.stringify({achievement:Number(post.achievement)}),JSON.stringify({achievement}),now);return json({ok:true,post:postDto(getPost(sql,postId))});
+    const body=request.json(),postId=id(body.postId),post=getPost(sql,postId),achievement=numberInRange(body.achievement,0,1000000);if(!post)return json({error:'게시글을 찾지 못했습니다.'},404);if(achievement===null)return json({error:'달성량을 확인해 주세요.'},400);const now=Math.floor(Date.now()/1000);sql.exec('UPDATE challenge_posts SET achievement=?,updated_at=? WHERE post_id=?',achievement,now,postId);sql.exec('INSERT INTO challenge_audit_logs(admin_id,target_type,target_id,action_name,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?)',id(body.adminId)||'admin','post',postId,'progress_update',JSON.stringify({achievement:Number(post.achievement)}),JSON.stringify({achievement}),now);return json({ok:true,post:postDto(getPost(sql,postId))});
   }
 
   if(request.method==='POST'&&path==='/admin/challenges/posts/delete'){
-    const body=await request.json(),postId=id(body.postId),post=getPost(sql,postId);if(!post)return json({error:'게시글을 찾지 못했습니다.'},404);const keys=deletePostData(sql,postId),now=Math.floor(Date.now()/1000);sql.exec('INSERT INTO challenge_audit_logs(admin_id,target_type,target_id,action_name,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?)',id(body.adminId)||'admin','post',postId,'delete',JSON.stringify(postDto(post)),'',now);return json({ok:true,attachmentKeys:keys});
+    const body=request.json(),postId=id(body.postId),post=getPost(sql,postId);if(!post)return json({error:'게시글을 찾지 못했습니다.'},404);const keys=deletePostData(sql,postId),now=Math.floor(Date.now()/1000);sql.exec('INSERT INTO challenge_audit_logs(admin_id,target_type,target_id,action_name,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?)',id(body.adminId)||'admin','post',postId,'delete',JSON.stringify(postDto(post)),'',now);return json({ok:true,attachmentKeys:keys});
   }
 
   if(request.method==='POST'&&path==='/admin/challenges/comments/delete'){
-    const body=await request.json(),commentId=id(body.commentId),row=[...sql.exec('SELECT * FROM challenge_comments WHERE comment_id=? LIMIT 1',commentId)][0];if(!row)return json({error:'댓글을 찾지 못했습니다.'},404);const now=Math.floor(Date.now()/1000);sql.exec('DELETE FROM challenge_comments WHERE comment_id=?',commentId);sql.exec('INSERT INTO challenge_audit_logs(admin_id,target_type,target_id,action_name,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?)',id(body.adminId)||'admin','comment',commentId,'delete',JSON.stringify({authorId:row.author_id,body:row.comment_body}),'',now);return json({ok:true});
+    const body=request.json(),commentId=id(body.commentId),row=[...sql.exec('SELECT * FROM challenge_comments WHERE comment_id=? LIMIT 1',commentId)][0];if(!row)return json({error:'댓글을 찾지 못했습니다.'},404);const now=Math.floor(Date.now()/1000);sql.exec('DELETE FROM challenge_comments WHERE comment_id=?',commentId);sql.exec('INSERT INTO challenge_audit_logs(admin_id,target_type,target_id,action_name,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?)',id(body.adminId)||'admin','comment',commentId,'delete',JSON.stringify({authorId:row.author_id,body:row.comment_body}),'',now);return json({ok:true});
   }
 
   if(request.method==='GET'&&path==='/admin/challenges/stats'){

@@ -1,3 +1,4 @@
+import { createGudongiSchema, handleGudongiRequest } from './gudongi-store.js';
 import {createChallengeSchema,deleteChallengeAccountData,handleChallengeStoreRequest} from './challenge-store.js';
 
 const JOB_TREE={
@@ -126,6 +127,7 @@ function verificationPopup(message,success=false,eventType='gmuc-admin-email-ver
 export class RankingStore {
   constructor(ctx){
     this.sql=ctx.storage.sql;
+    this.transaction=ctx.storage.transactionSync?fn=>ctx.storage.transactionSync(fn):fn=>fn();
     ctx.blockConcurrencyWhile(async()=>{this.sql.exec(`
       CREATE TABLE IF NOT EXISTS favorites (
         user_id TEXT NOT NULL,book_key TEXT NOT NULL,title TEXT NOT NULL,authors TEXT NOT NULL,
@@ -163,13 +165,14 @@ export class RankingStore {
       CREATE TABLE IF NOT EXISTS user_registry (
         user_id TEXT PRIMARY KEY,created_at INTEGER NOT NULL,last_seen_at INTEGER NOT NULL
       );
-    `);createChallengeSchema(this.sql);const columns=[...this.sql.exec('PRAGMA table_info(admin_settings)')];if(!columns.some(column=>column.name==='verification_version'))this.sql.exec("ALTER TABLE admin_settings ADD COLUMN verification_version TEXT NOT NULL DEFAULT ''");if(!columns.some(column=>column.name==='session_epoch'))this.sql.exec("ALTER TABLE admin_settings ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0");if(!columns.some(column=>column.name==='pending_email'))this.sql.exec("ALTER TABLE admin_settings ADD COLUMN pending_email TEXT NOT NULL DEFAULT ''");if(!columns.some(column=>column.name==='pending_expires_at'))this.sql.exec("ALTER TABLE admin_settings ADD COLUMN pending_expires_at INTEGER NOT NULL DEFAULT 0");const accountColumns=[...this.sql.exec('PRAGMA table_info(accounts)')];if(!accountColumns.some(column=>column.name==='password_scheme'))this.sql.exec("ALTER TABLE accounts ADD COLUMN password_scheme TEXT NOT NULL DEFAULT 'hmac'");const favoriteColumns=[...this.sql.exec('PRAGMA table_info(favorites)')];if(!favoriteColumns.some(column=>column.name==='item_type'))this.sql.exec("ALTER TABLE favorites ADD COLUMN item_type TEXT NOT NULL DEFAULT 'book'");if(!favoriteColumns.some(column=>column.name==='doi'))this.sql.exec("ALTER TABLE favorites ADD COLUMN doi TEXT NOT NULL DEFAULT ''");if(!favoriteColumns.some(column=>column.name==='landing_url'))this.sql.exec("ALTER TABLE favorites ADD COLUMN landing_url TEXT NOT NULL DEFAULT ''");if(!favoriteColumns.some(column=>column.name==='match_score'))this.sql.exec("ALTER TABLE favorites ADD COLUMN match_score INTEGER NOT NULL DEFAULT 0");this.sql.exec("INSERT OR IGNORE INTO user_registry(user_id,created_at,last_seen_at) SELECT user_id,created_at,last_login_at FROM accounts");this.sql.exec("INSERT OR IGNORE INTO user_registry(user_id,created_at,last_seen_at) SELECT substr(user_id,9),MIN(created_at),MAX(created_at) FROM favorites WHERE user_id LIKE 'account:%' AND length(user_id)>8 GROUP BY substr(user_id,9)");this.sql.exec("INSERT OR IGNORE INTO user_registry(user_id,created_at,last_seen_at) VALUES('admin',unixepoch(),unixepoch())");});
+    `);createChallengeSchema(this.sql);this.transaction(()=>createGudongiSchema(this.sql));const columns=[...this.sql.exec('PRAGMA table_info(admin_settings)')];if(!columns.some(column=>column.name==='verification_version'))this.sql.exec("ALTER TABLE admin_settings ADD COLUMN verification_version TEXT NOT NULL DEFAULT ''");if(!columns.some(column=>column.name==='session_epoch'))this.sql.exec("ALTER TABLE admin_settings ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0");if(!columns.some(column=>column.name==='pending_email'))this.sql.exec("ALTER TABLE admin_settings ADD COLUMN pending_email TEXT NOT NULL DEFAULT ''");if(!columns.some(column=>column.name==='pending_expires_at'))this.sql.exec("ALTER TABLE admin_settings ADD COLUMN pending_expires_at INTEGER NOT NULL DEFAULT 0");const accountColumns=[...this.sql.exec('PRAGMA table_info(accounts)')];if(!accountColumns.some(column=>column.name==='password_scheme'))this.sql.exec("ALTER TABLE accounts ADD COLUMN password_scheme TEXT NOT NULL DEFAULT 'hmac'");const favoriteColumns=[...this.sql.exec('PRAGMA table_info(favorites)')];if(!favoriteColumns.some(column=>column.name==='item_type'))this.sql.exec("ALTER TABLE favorites ADD COLUMN item_type TEXT NOT NULL DEFAULT 'book'");if(!favoriteColumns.some(column=>column.name==='doi'))this.sql.exec("ALTER TABLE favorites ADD COLUMN doi TEXT NOT NULL DEFAULT ''");if(!favoriteColumns.some(column=>column.name==='landing_url'))this.sql.exec("ALTER TABLE favorites ADD COLUMN landing_url TEXT NOT NULL DEFAULT ''");if(!favoriteColumns.some(column=>column.name==='match_score'))this.sql.exec("ALTER TABLE favorites ADD COLUMN match_score INTEGER NOT NULL DEFAULT 0");this.sql.exec("INSERT OR IGNORE INTO user_registry(user_id,created_at,last_seen_at) SELECT user_id,created_at,last_login_at FROM accounts");this.sql.exec("INSERT OR IGNORE INTO user_registry(user_id,created_at,last_seen_at) SELECT substr(user_id,9),MIN(created_at),MAX(created_at) FROM favorites WHERE user_id LIKE 'account:%' AND length(user_id)>8 GROUP BY substr(user_id,9)");this.sql.exec("INSERT OR IGNORE INTO user_registry(user_id,created_at,last_seen_at) VALUES('admin',unixepoch(),unixepoch())");});
   }
 
   async fetch(request){
     const url=new URL(request.url);
 
-    const challengeResponse=await handleChallengeStoreRequest(this.sql,request,url);if(challengeResponse)return challengeResponse;
+    const growthResponse=await handleGudongiRequest(this.sql,request,this.transaction);if(growthResponse)return growthResponse;
+    const challengeResponse=await handleChallengeStoreRequest(this.sql,request,url,this.transaction);if(challengeResponse)return challengeResponse;
 
     if(request.method==='GET'&&url.pathname==='/admin/settings'){
       const row=[...this.sql.exec("SELECT email,verified_at,verification_version,session_epoch FROM admin_settings WHERE setting_key='primary' LIMIT 1")][0];
@@ -185,6 +188,11 @@ export class RankingStore {
       return json({ok:true,verified:true,email});
     }
 
+    if(request.method==='POST'&&url.pathname==='/account/password'){
+      const body=await request.json(),saved=[...this.sql.exec('SELECT password_hash,must_reset FROM accounts WHERE user_id=?',body.userId)][0];
+      if(!saved||saved.must_reset||!constantTimeEqual(saved.password_hash,body.currentHash))return json({error:'현재 비밀번호가 일치하지 않습니다.',field:'currentPassword'},403);
+      this.sql.exec("UPDATE accounts SET password_hash=?,password_salt=?,password_scheme='hmac' WHERE user_id=?",body.newHash,body.newSalt,body.userId);return json({ok:true});
+    }
     if(request.method==='GET'&&url.pathname==='/account/auth-info'){
       const userId=accountId(url.searchParams.get('userId')),row=userId?[...this.sql.exec('SELECT password_salt,password_scheme,must_reset,reset_salt FROM accounts WHERE user_id=? LIMIT 1',userId)][0]:null;
       return json({exists:Boolean(row),passwordSalt:row?.password_salt||'',passwordScheme:row?.password_scheme||'hmac',mustReset:Boolean(row?.must_reset),resetSalt:row?.reset_salt||''});
@@ -342,10 +350,11 @@ async function challengeApi(request,env,url){
   if(postsMatch&&request.method==='POST'){
     const userId=await userFromSession(request,env);if(!userId)return json({error:'게시글을 작성하려면 로그인해 주세요.'},401);if(!String(request.headers.get('content-type')||'').toLowerCase().includes('multipart/form-data'))return json({error:'게시글은 첨부 가능한 양식으로 전송해 주세요.'},415);
     const form=await request.formData(),files=form.getAll('files').filter(file=>file&&typeof file.arrayBuffer==='function');if(files.length>10)return json({error:'첨부파일은 최대 10개까지 등록할 수 있습니다.'},400);const total=files.reduce((sum,file)=>sum+Number(file.size||0),0);if(total>CHALLENGE_TOTAL_LIMIT)return json({error:'첨부파일 전체 크기는 50MB를 넘을 수 없습니다.'},413);if(files.length&&!env.CHALLENGE_FILES)return json({error:'첨부파일 저장소가 아직 연결되지 않았습니다.'},503);
-    const postId=crypto.randomUUID(),uploads=[],metadata=[];
+    const requestId=String(form.get('requestId')||crypto.randomUUID());if(!/^[\w-]{8,100}$/.test(requestId))return json({error:'요청 번호를 확인해 주세요.'},400);
+    const postId=await sha256(`challenge:${userId}:${requestId}`),uploads=[],metadata=[];
     try{
       for(const file of files){const mime=String(file.type||'').toLowerCase(),size=Number(file.size||0),name=safeAttachmentName(file.name);if(!CHALLENGE_FILE_TYPES.has(mime))throw Object.assign(new Error(`${name}: 지원하지 않는 파일 형식입니다.`),{status:415});if(size<1||size>CHALLENGE_FILE_LIMIT)throw Object.assign(new Error(`${name}: 파일 크기는 10MB 이하여야 합니다.`),{status:413});const buffer=await file.arrayBuffer(),bytes=new Uint8Array(buffer.slice(0,16));if(!validAttachmentSignature(bytes,mime))throw Object.assign(new Error(`${name}: 파일 내용과 형식이 일치하지 않습니다.`),{status:415});const attachmentId=crypto.randomUUID(),key=`challenge/${postId}/${attachmentId}`;await env.CHALLENGE_FILES.put(key,buffer,{httpMetadata:{contentType:mime},customMetadata:{postId,attachmentId,originalName:encodeURIComponent(name)}});uploads.push(key);metadata.push({id:attachmentId,key,name,mime,size});}
-      const response=await challengeInternal(env,'/challenges/posts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({postId,boardId:postsMatch[1],authorId:userId,title:form.get('title'),body:form.get('body'),achievement:form.get('achievement'),attachments:metadata})});if(!response.ok)await deleteChallengeObjects(env,uploads);return response;
+      const response=await challengeInternal(env,'/challenges/posts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({postId,boardId:postsMatch[1],authorId:userId,title:form.get('title'),body:form.get('body'),achievement:form.get('achievement'),attachments:metadata})});const result=await response.clone().json();if(!response.ok||result.replayed)await deleteChallengeObjects(env,uploads);return response;
     }catch(error){await deleteChallengeObjects(env,uploads);return json({error:error.message||'첨부파일을 처리하지 못했습니다.'},Number(error.status)||500);}
   }
   return json({error:'Not found'},404);
@@ -357,11 +366,36 @@ async function getAdminState(env){
   return {adminId:ADMIN_ID,emailVerified:verified,maskedEmail:maskEmail(activeEmail),email:activeEmail,sessionEpoch:Number(stored.sessionEpoch||0),accessConfigured:Boolean(env.ADMIN_ACCESS_ENABLED&&env.ADMIN_ACCESS_TEAM_DOMAIN&&env.ADMIN_ACCESS_AUD)};
 }
 
+function validProfileAvatar(value){
+  if(value==='')return true;
+  if(typeof value!=='string'||value.length>240000||!/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(value))return false;
+  try{const bytes=Uint8Array.from(atob(value.split(',')[1]),c=>c.charCodeAt(0));if(bytes[0]!==255||bytes[1]!==216||bytes[bytes.length-2]!==255||bytes[bytes.length-1]!==217)return false;
+    for(let i=2;i+8<bytes.length;){if(bytes[i]!==255)return false;const marker=bytes[i+1],len=bytes[i+2]*256+bytes[i+3];if(len<2)return false;if([192,193,194].includes(marker)){const h=bytes[i+5]*256+bytes[i+6],w=bytes[i+7]*256+bytes[i+8];return h===256&&w===256;}i+=2+len;}return false;
+  }catch{return false;}
+}
 async function accountApi(request,env,url){
   if(request.method!=='GET'&&!sameOrigin(request))return json({error:'허용되지 않은 요청입니다.'},403);
   if(request.method==='POST'&&url.pathname==='/api/account/logout')return json({ok:true},200,{'set-cookie':userCookie(request,'',0)});
   if(request.method==='GET'&&url.pathname==='/api/account/session'){const userId=await userFromSession(request,env);return userId?json({ok:true,userId}):json({error:'로그인이 필요합니다.'},401);}
-  if(request.method==='POST'&&url.pathname==='/api/account/recommendations/log'){const userId=await userFromSession(request,env);if(!userId)return json({error:'로그인이 필요합니다.'},401);const body=await request.json();return rankingStub(env).fetch(new Request('https://rankings.internal/recommendations/log',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId,bookCount:body.bookCount,profile:body.profile})}));}
+  if(request.method==='POST'&&url.pathname==='/api/account/recommendations/log')return json({error:'추천 사용량은 서버가 실제 제공한 결과로만 기록합니다.'},410);
+  if(['/api/account/gudongi','/api/account/appearance','/api/account/seen','/api/account/avatar','/api/account/password'].includes(url.pathname)){
+    const userId=await userFromSession(request,env);if(!userId)return json({error:'로그인이 필요합니다.'},401);
+    if(url.pathname==='/api/account/gudongi'&&request.method==='GET')return challengeInternal(env,`/gudongi/profile?userId=${encodeURIComponent(userId)}`);
+    if(request.method!=='POST')return json({error:'Method not allowed'},405);
+    const raw=await request.text();if(raw.length>250000)return json({error:'사진 크기가 너무 큽니다.'},413);const body=JSON.parse(raw||'{}');
+    if(url.pathname==='/api/account/password'){
+      const current=String(body.currentPassword||''),next=String(body.newPassword||''),confirm=String(body.confirmPassword||'');
+      if(current.length<4||current.length>200)return json({error:'현재 비밀번호를 확인해 주세요.',field:'currentPassword'},400);
+      if(next.length<6||next.length>200)return json({error:'새 비밀번호는 6~200자로 입력해 주세요.',field:'newPassword'},400);
+      if(next!==confirm)return json({error:'새 비밀번호 확인이 일치하지 않습니다.',field:'confirmPassword'},400);
+      if(current===next)return json({error:'현재 비밀번호와 다른 비밀번호를 입력해 주세요.',field:'newPassword'},400);
+      const info=await (await challengeInternal(env,`/account/auth-info?userId=${encodeURIComponent(userId)}`)).json(),newSalt=crypto.randomUUID(),currentHash=await accountPasswordHash(userId,current,info.passwordSalt,env),newHash=await accountPasswordHash(userId,next,newSalt,env);
+      return challengeInternal(env,'/account/password',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId,currentHash,newSalt,newHash})});
+    }
+    const action=url.pathname.split('/').pop();
+    if(action==='avatar'&&!validProfileAvatar(body.avatar))return json({error:'원형 미리보기에서 조정한 JPEG 사진만 등록할 수 있습니다.'},400);
+    return challengeInternal(env,`/gudongi/${action}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId,appearanceId:body.appearanceId,level:body.level,avatar:body.avatar})});
+  }
   if(request.method==='POST'&&url.pathname==='/api/account/migrate-legacy'){const body=await request.json().catch(()=>({})),accounts=Array.isArray(body.accounts)?body.accounts.slice(0,200):[],response=await rankingStub(env).fetch(new Request('https://rankings.internal/account/migrate-legacy',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({accounts})}));return response;}
   if(request.method==='POST'&&url.pathname==='/api/account/delete'){
     if(!env.ADMIN_SESSION_SECRET)return json({error:'계정 보안 설정이 완료되지 않았습니다.'},503);
@@ -467,7 +501,16 @@ export default {
         const body=await request.json(),requested=String(body.userId||''),targetUser=requested.startsWith('account:')?managedUserId(requested.slice(8)):'',sessionUser=await userFromSession(request,env),allowed=targetUser===ADMIN_ID?await validAdminSession(request,env):requested===`account:${sessionUser}`;if(requested.startsWith('account:')&&!allowed)return json({error:'로그인이 필요합니다.'},401);return rankingStub(env).fetch(new Request('https://rankings.internal/favorite',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}));
       }
       if(request.method==='POST'&&url.pathname==='/api/recommend'){
-        const profile=await request.json();if(!Array.isArray(profile.jobs)||!profile.jobs.length)return json({error:'업무 분야를 선택해 주세요.'},400);if(profile.level===PAPER_LEVEL){profile.practical=PAPER_PRACTICAL;return json(await recommendPapers(profile,env));}return json(await recommend(profile,env));
+        if(!sameOrigin(request))return json({error:'허용되지 않은 요청입니다.'},403);
+        const input=await request.json(),profile={jobs:input.jobs,purposes:input.purposes,level:input.level,freshness:input.freshness,practical:input.practical};
+        if(!Array.isArray(profile.jobs)||!profile.jobs.length||profile.jobs.length>12||!profile.jobs.every(x=>typeof x==='string'&&x.length<=60)||!Array.isArray(profile.purposes)||!profile.purposes.length||profile.purposes.length>12||!profile.purposes.every(x=>typeof x==='string'&&x.length<=60)||![profile.level,profile.freshness,profile.practical].every(x=>typeof x==='string'&&x.length<=60))return json({error:'추천 조건을 모두 선택해 주세요.'},400);
+        if(profile.level===PAPER_LEVEL)profile.practical=PAPER_PRACTICAL;
+        const userId=await userFromSession(request,env),requestId=String(input.requestId||crypto.randomUUID()),fingerprint=await sha256(JSON.stringify(profile));
+        if(!/^[\w-]{8,100}$/.test(requestId))return json({error:'요청 번호를 확인해 주세요.'},400);
+        const internal=(path,body)=>challengeInternal(env,path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+        if(userId){const check=await internal('/gudongi/recommendation/check',{userId,requestId,fingerprint}),data=await check.clone().json();if(!data.available)return check;}
+        const result=profile.level===PAPER_LEVEL?await recommendPapers(profile,env):await recommend(profile,env);
+        return userId?internal('/gudongi/recommendation/deliver',{userId,requestId,fingerprint,profile,result}):json({...result,earnedXp:0,loginRequiredForXp:true});
       }
       if(request.method==='GET'&&url.pathname==='/api/new-books')return json(await newBooks(env));
       if(request.method==='GET'&&url.pathname==='/api/status')return json({services:[{name:'Google Books',connected:true},{name:'네이버 책',connected:Boolean(env.NAVER_CLIENT_ID&&env.NAVER_CLIENT_SECRET)},...(env.YES24_API_KEY?[{name:'YES24',connected:true}]:[])]});
