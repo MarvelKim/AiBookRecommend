@@ -8,11 +8,13 @@ await f.internal('/challenges/posts',{postId:'duplicate',boardId:'test-board',au
 assert.equal((await profile()).totalXp,47);assert.equal((await profile()).level,4);assert.equal((await profile()).currentXp,2);
 assert.equal((await f.api('/api/account/appearance',{appearanceId:'jumping'},cookie)).status,200);
 await f.api('/api/account/seen',{level:4},cookie);
-assert.equal((await f.internal('/admin/challenges/posts/delete',{postId:'duplicate',adminId:'admin'})).status,200);
+assert.equal((await f.internal('/admin/challenges/posts/delete',{postId:'duplicate',adminId:'admin'})).status,400);
+const deletion=await f.internal('/admin/challenges/posts/delete',{postId:'duplicate',adminId:'admin',reason:'중복으로 등록된 기록입니다.'});assert.equal(deletion.status,200);const deletionData=await deletion.json();assert.equal(deletionData.removedXp,3);assert.equal(deletionData.previousLevel,4);assert.equal(deletionData.currentLevel,3);
 const lowered=await profile();assert.equal(lowered.totalXp,44);assert.equal(lowered.level,3);assert.equal(lowered.currentXp,29);assert.equal(lowered.appearanceId,'default');assert.equal(lowered.lastSeenLevel,3);
 assert.ok(lowered.appearanceCatalog.filter(a=>a.level>=4).every(a=>!a.unlocked));
 for(const appearanceId of ['casual','jumping','suit','safety-helmet','hearts'])assert.equal((await f.api('/api/account/appearance',{appearanceId},cookie)).status,403);
-assert.equal((await f.internal('/admin/challenges/posts/delete',{postId:'duplicate',adminId:'admin'})).status,404);assert.equal((await profile()).totalXp,44);
+const notices=await(await f.api('/api/account/challenge-deletion-notices',null,cookie)).json();assert.equal(notices.notices.length,1);assert.equal(notices.notices[0].reason,'중복으로 등록된 기록입니다.');assert.equal(notices.notices[0].postTitle,'duplicate');assert.equal(notices.notices[0].previousLevel,4);assert.equal(notices.notices[0].currentLevel,3);assert.equal((await f.api('/api/account/challenge-deletion-notices/read',{notificationId:notices.notices[0].id},cookie)).status,200);assert.equal((await(await f.api('/api/account/challenge-deletion-notices',null,cookie)).json()).notices.length,0);
+assert.equal((await f.internal('/admin/challenges/posts/delete',{postId:'duplicate',adminId:'admin',reason:'이미 삭제됨'})).status,404);assert.equal((await profile()).totalXp,44);
 await f.internal('/challenges/posts',{postId:'new-valid',boardId:'test-board',authorId:'reader',title:'valid',body:'new activity',achievement:1});
 assert.equal((await profile()).level,4);assert.equal((await profile()).levelUp,true);assert.equal((await profile()).appearanceId,'casual');
 console.log('Admin deletion: LV4 2/50 -> LV3 29/30, relocking and re-unlocking passed');

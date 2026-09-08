@@ -1,4 +1,4 @@
-import { createGudongiSchema, gudongiProfile, handleGudongiRequest, recordLibraryAddition } from './gudongi-store.js';
+import { createGudongiSchema, gudongiProfile, handleGudongiRequest, recordLibraryAddition, revokeLibraryXp } from './gudongi-store.js';
 import {createChallengeSchema,deleteChallengeAccountData,handleChallengeStoreRequest} from './challenge-store.js';
 
 const JOB_TREE={
@@ -302,11 +302,12 @@ export class RankingStore {
         const registryId=userId.startsWith('account:')?managedUserId(userId.slice(8)):'',member=registryId&&[...this.sql.exec('SELECT 1 AS found FROM accounts WHERE user_id=?',registryId)][0],existing=[...this.sql.exec('SELECT 1 AS found FROM favorites WHERE user_id=? AND book_key=?',userId,key)][0];
         if(registryId){const now=Math.floor(Date.now()/1000);this.sql.exec('INSERT INTO user_registry(user_id,created_at,last_seen_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET last_seen_at=excluded.last_seen_at',registryId,now,now);}
         let reward=null;
-        if(body.saved&&!existing&&member){reward=recordLibraryAddition(this.sql,registryId,key);if(reward.limited)return json({error:'오늘은 나의 서재에 30권을 모두 추가했어요. 한국 시간 자정부터 다시 추가할 수 있어요.',code:'DAILY_LIBRARY_LIMIT',quota:reward.quota},429);}
+        if(body.saved&&!existing&&member){reward=recordLibraryAddition(this.sql,registryId,key,book.title);if(reward.limited)return json({error:'오늘은 나의 서재에 30권을 모두 추가했어요. 한국 시간 자정부터 다시 추가할 수 있어요.',code:'DAILY_LIBRARY_LIMIT',quota:reward.quota},429);}
+        if(!body.saved&&existing&&member)reward=revokeLibraryXp(this.sql,registryId,key);
         if(body.saved)this.sql.exec(`INSERT INTO favorites(user_id,book_key,title,authors,publisher,published_date,isbn,thumbnail,item_type,doi,landing_url,match_score) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,book_key) DO UPDATE SET title=excluded.title,authors=excluded.authors,publisher=excluded.publisher,published_date=excluded.published_date,isbn=excluded.isbn,thumbnail=excluded.thumbnail,item_type=excluded.item_type,doi=excluded.doi,landing_url=excluded.landing_url,match_score=excluded.match_score`,userId,key,String(book.title).slice(0,300),JSON.stringify(book.authors||[]),String(book.publisher||'').slice(0,200),String(book.publishedDate||book.year||'').slice(0,30),String(book.isbn||'').slice(0,20),String(book.thumbnail||'').slice(0,1000),book.type==='paper'?'paper':'book',String(book.doi||'').slice(0,500),String(book.landingUrl||'').slice(0,1000),Math.max(0,Math.min(100,Number(book.match)||0)));
         else this.sql.exec('DELETE FROM favorites WHERE user_id=? AND book_key=?',userId,key);
         const profile=member?(reward?.gudongi||gudongiProfile(this.sql,registryId)):null;
-        return json({ok:true,saved:Boolean(body.saved),newlyAdded:Boolean(body.saved&&!existing),earnedXp:Number(reward?.earnedXp||0),gudongi:profile,quota:profile?.quota||null});
+        return json({ok:true,saved:Boolean(body.saved),newlyAdded:Boolean(body.saved&&!existing),earnedXp:Number(reward?.earnedXp||0),removedXp:Number(reward?.removedXp||0),gudongi:profile,quota:profile?.quota||null});
       });
     }
     if(request.method==='GET'&&url.pathname==='/shelf'){
@@ -384,9 +385,11 @@ async function accountApi(request,env,url){
   if(request.method==='POST'&&url.pathname==='/api/account/logout')return json({ok:true},200,{'set-cookie':userCookie(request,'',0)});
   if(request.method==='GET'&&url.pathname==='/api/account/session'){const userId=await userFromSession(request,env);return userId?json({ok:true,userId}):json({error:'로그인이 필요합니다.'},401);}
   if(request.method==='POST'&&url.pathname==='/api/account/recommendations/log')return json({error:'추천 사용량은 서버가 실제 제공한 결과로만 기록합니다.'},410);
-  if(['/api/account/gudongi','/api/account/appearance','/api/account/seen','/api/account/avatar','/api/account/password'].includes(url.pathname)){
+  if(['/api/account/gudongi','/api/account/xp-history','/api/account/challenge-deletion-notices','/api/account/challenge-deletion-notices/read','/api/account/appearance','/api/account/seen','/api/account/avatar','/api/account/password'].includes(url.pathname)){
     const userId=await userFromSession(request,env);if(!userId)return json({error:'로그인이 필요합니다.'},401);
     if(url.pathname==='/api/account/gudongi'&&request.method==='GET')return challengeInternal(env,`/gudongi/profile?userId=${encodeURIComponent(userId)}`);
+    if(url.pathname==='/api/account/xp-history'&&request.method==='GET')return challengeInternal(env,`/gudongi/history?userId=${encodeURIComponent(userId)}`);
+    if(url.pathname==='/api/account/challenge-deletion-notices'&&request.method==='GET')return challengeInternal(env,`/challenges/deletion-notifications?userId=${encodeURIComponent(userId)}`);
     if(request.method!=='POST')return json({error:'Method not allowed'},405);
     const raw=await request.text();if(raw.length>250000)return json({error:'사진 크기가 너무 큽니다.'},413);const body=JSON.parse(raw||'{}');
     if(url.pathname==='/api/account/password'){
@@ -398,6 +401,7 @@ async function accountApi(request,env,url){
       const info=await (await challengeInternal(env,`/account/auth-info?userId=${encodeURIComponent(userId)}`)).json(),newSalt=crypto.randomUUID(),currentHash=await accountPasswordHash(userId,current,info.passwordSalt,env),newHash=await accountPasswordHash(userId,next,newSalt,env);
       return challengeInternal(env,'/account/password',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId,currentHash,newSalt,newHash})});
     }
+    if(url.pathname==='/api/account/challenge-deletion-notices/read')return challengeInternal(env,'/challenges/deletion-notifications/read',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId,notificationId:body.notificationId})});
     const action=url.pathname.split('/').pop();
     if(action==='avatar'&&!validProfileAvatar(body.avatar))return json({error:'원형 미리보기에서 조정한 JPEG 사진만 등록할 수 있습니다.'},400);
     return challengeInternal(env,`/gudongi/${action}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId,appearanceId:body.appearanceId,level:body.level,avatar:body.avatar})});

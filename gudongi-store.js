@@ -26,7 +26,7 @@ export function createGudongiSchema(sql){
     CREATE INDEX IF NOT EXISTS gudongi_xp_user ON gudongi_xp(user_id,earned_date,source_type);
     CREATE TABLE IF NOT EXISTS gudongi_deliveries(user_id TEXT NOT NULL,request_id TEXT NOT NULL,fingerprint TEXT NOT NULL,earned_date TEXT NOT NULL,book_count INTEGER NOT NULL,result_json TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(user_id,request_id));
     CREATE INDEX IF NOT EXISTS gudongi_deliveries_day ON gudongi_deliveries(user_id,earned_date);
-    CREATE TABLE IF NOT EXISTS gudongi_library_additions(user_id TEXT NOT NULL,earned_date TEXT NOT NULL,book_key TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(user_id,earned_date,book_key));
+    CREATE TABLE IF NOT EXISTS gudongi_library_additions(user_id TEXT NOT NULL,earned_date TEXT NOT NULL,book_key TEXT NOT NULL,created_at INTEGER NOT NULL,book_title TEXT NOT NULL DEFAULT '',xp_awarded INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,earned_date,book_key));
     CREATE INDEX IF NOT EXISTS gudongi_library_additions_day ON gudongi_library_additions(user_id,earned_date);
     CREATE TABLE IF NOT EXISTS gudongi_migrations(version TEXT PRIMARY KEY,created_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS gudongi_audit(audit_id INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT NOT NULL,source_id TEXT NOT NULL,action TEXT NOT NULL,before_value TEXT NOT NULL,after_value TEXT NOT NULL,created_at INTEGER NOT NULL);
@@ -51,6 +51,11 @@ export function createGudongiSchema(sql){
       DELETE FROM gudongi_library_additions WHERE user_id=OLD.user_id;
     END;
   `);
+  const additionColumns=[...sql.exec('PRAGMA table_info(gudongi_library_additions)')];
+  if(!additionColumns.some(column=>column.name==='book_title'))sql.exec("ALTER TABLE gudongi_library_additions ADD COLUMN book_title TEXT NOT NULL DEFAULT ''");
+  if(!additionColumns.some(column=>column.name==='xp_awarded'))sql.exec("ALTER TABLE gudongi_library_additions ADD COLUMN xp_awarded INTEGER NOT NULL DEFAULT 0");
+  sql.exec("UPDATE gudongi_library_additions SET xp_awarded=1 WHERE xp_awarded=0 AND EXISTS(SELECT 1 FROM gudongi_xp x WHERE x.source_type='library' AND x.source_id='library:'||gudongi_library_additions.user_id||':'||gudongi_library_additions.earned_date||':'||gudongi_library_additions.book_key)");
+  sql.exec("UPDATE gudongi_library_additions SET book_title=COALESCE((SELECT f.title FROM favorites f WHERE f.user_id='account:'||gudongi_library_additions.user_id AND f.book_key=gudongi_library_additions.book_key LIMIT 1),'') WHERE book_title=''");
   // One-time, idempotent backfill. Historical books do NOT consume the new quota.
   if(!row(sql,"SELECT version FROM gudongi_migrations WHERE version='v1'")){
     sql.exec("INSERT OR IGNORE INTO gudongi_xp SELECT 'challenge',post_id,author_id,achievement*3,date(created_at,'unixepoch','+9 hours'),created_at FROM challenge_posts");
@@ -62,14 +67,34 @@ export function quota(sql,userId,now=Date.now()){
   const day=seoulDay(now),used=Number(row(sql,'SELECT COUNT(*) AS n FROM gudongi_library_additions WHERE user_id=? AND earned_date=?',userId,day).n),xp=Number(row(sql,"SELECT COALESCE(SUM(xp_amount),0) AS n FROM gudongi_xp WHERE user_id=? AND earned_date=? AND source_type IN ('library','recommendation')",userId,day).n);
   return {day,used,limit:30,remaining:Math.max(0,30-used),xp,remainingXp:Math.max(0,5-xp),resetAt:new Date(Date.parse(`${day}T00:00:00+09:00`)+86400000).toISOString()};
 }
-export function recordLibraryAddition(sql,userId,bookKey,now=Date.now()){
-  const q=quota(sql,userId,now),existing=row(sql,'SELECT 1 AS found FROM gudongi_library_additions WHERE user_id=? AND earned_date=? AND book_key=?',userId,q.day,bookKey);
-  if(existing)return {counted:false,earnedXp:0,gudongi:gudongiProfile(sql,userId),quota:q};
+export function recordLibraryAddition(sql,userId,bookKey,bookTitle='',now=Date.now()){
+  const q=quota(sql,userId,now),existing=row(sql,'SELECT * FROM gudongi_library_additions WHERE user_id=? AND earned_date=? AND book_key=?',userId,q.day,bookKey);
+  if(existing){
+    const sourceId=`library:${userId}:${q.day}:${bookKey}`,active=row(sql,"SELECT 1 AS found FROM gudongi_xp WHERE source_type='library' AND source_id=?",sourceId),earnedXp=Number(existing.xp_awarded)&&!active&&q.remainingXp>0?1:0;
+    if(earnedXp){sql.exec("INSERT INTO gudongi_xp VALUES('library',?,?,1,?,?)",sourceId,userId,q.day,existing.created_at);sql.exec('INSERT INTO gudongi_audit(user_id,source_id,action,before_value,after_value,created_at) VALUES(?,?,?,?,?,unixepoch())',userId,sourceId,'library_xp_restore','0','1');}
+    if(bookTitle&&!existing.book_title)sql.exec('UPDATE gudongi_library_additions SET book_title=? WHERE user_id=? AND earned_date=? AND book_key=?',String(bookTitle).slice(0,300),userId,q.day,bookKey);
+    return {counted:false,earnedXp,gudongi:gudongiProfile(sql,userId),quota:quota(sql,userId,now)};
+  }
   if(q.remaining<=0)return {limited:true,counted:false,earnedXp:0,quota:q};
   const createdAt=Math.floor(now/1000),earnedXp=q.remainingXp>0?1:0;
-  sql.exec('INSERT INTO gudongi_library_additions VALUES(?,?,?,?)',userId,q.day,bookKey,createdAt);
+  sql.exec('INSERT INTO gudongi_library_additions(user_id,earned_date,book_key,created_at,book_title,xp_awarded) VALUES(?,?,?,?,?,?)',userId,q.day,bookKey,createdAt,String(bookTitle).slice(0,300),earnedXp);
   if(earnedXp)sql.exec("INSERT OR IGNORE INTO gudongi_xp VALUES('library',?,?,1,?,?)",`library:${userId}:${q.day}:${bookKey}`,userId,q.day,createdAt);
   return {counted:true,earnedXp,gudongi:gudongiProfile(sql,userId),quota:quota(sql,userId,now)};
+}
+export function revokeLibraryXp(sql,userId,bookKey,now=Date.now()){
+  const additions=[...sql.exec('SELECT earned_date FROM gudongi_library_additions WHERE user_id=? AND book_key=? AND xp_awarded=1',userId,bookKey)],sourceIds=additions.map(item=>`library:${userId}:${item.earned_date}:${bookKey}`);let removedXp=0;
+  for(const sourceId of sourceIds){const earned=row(sql,"SELECT xp_amount FROM gudongi_xp WHERE source_type='library' AND source_id=? AND user_id=?",sourceId,userId);if(!earned)continue;removedXp+=Number(earned.xp_amount||0);sql.exec("DELETE FROM gudongi_xp WHERE source_type='library' AND source_id=? AND user_id=?",sourceId,userId);sql.exec('INSERT INTO gudongi_audit(user_id,source_id,action,before_value,after_value,created_at) VALUES(?,?,?,?,?,unixepoch())',userId,sourceId,'library_xp_remove',String(earned.xp_amount),'0');}
+  return {removedXp,gudongi:gudongiProfile(sql,userId),quota:quota(sql,userId,now)};
+}
+export function gudongiHistory(sql,userId){
+  const rows=[...sql.exec(`SELECT x.source_type,x.source_id,x.xp_amount,x.created_at,a.book_title,f.title AS favorite_title,p.title AS post_title,b.name AS board_name
+    FROM gudongi_xp x
+    LEFT JOIN gudongi_library_additions a ON x.source_type='library' AND a.user_id=x.user_id AND a.earned_date=x.earned_date AND x.source_id='library:'||a.user_id||':'||a.earned_date||':'||a.book_key
+    LEFT JOIN favorites f ON a.book_key=f.book_key AND f.user_id='account:'||x.user_id
+    LEFT JOIN challenge_posts p ON x.source_type='challenge' AND p.post_id=x.source_id
+    LEFT JOIN challenge_boards b ON p.board_id=b.board_id
+    WHERE x.user_id=? ORDER BY x.created_at DESC,x.source_id DESC LIMIT 200`,userId)];
+  return rows.map(item=>({type:item.source_type==='challenge'?'challenge':'library',targetId:item.source_type==='challenge'?item.source_id:'',title:item.source_type==='challenge'?(item.post_title||'챌린지 기록'):(item.book_title||item.favorite_title||'과거 도서 추천'),context:item.source_type==='challenge'?(item.board_name||'챌린지'):'나의 서재',xp:Number(item.xp_amount),createdAt:Number(item.created_at)}));
 }
 export function gudongiProfile(sql,userId){
   sql.exec('INSERT OR IGNORE INTO gudongi_profiles(user_id) VALUES(?)',userId);
@@ -103,6 +128,7 @@ export async function handleGudongiRequest(sql,request,transaction=fn=>fn()){
   if(!row(sql,'SELECT user_id FROM accounts WHERE user_id=?',userId))return json({error:'로그인이 필요합니다.'},401);
   return transaction(()=>{
     if(url.pathname==='/gudongi/profile')return json({gudongi:gudongiProfile(sql,userId)});
+    if(url.pathname==='/gudongi/history')return json({history:gudongiHistory(sql,userId)});
     if(url.pathname==='/gudongi/recommendation/check')return recommendationLookup(sql,userId,body.requestId,body.fingerprint)||json({available:true});
     if(url.pathname==='/gudongi/recommendation/deliver')return deliverRecommendation(sql,body);
     if(url.pathname==='/gudongi/appearance'){

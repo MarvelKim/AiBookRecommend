@@ -33,7 +33,7 @@ assert.equal((await f.api('/api/account/appearance',{appearanceId:'reading',user
 assert.equal((await (await f.api('/api/account/gudongi',null,otherCookie)).json()).gudongi.totalXp,0);
 await f.internal('/admin/challenges/posts/progress',{postId:firstData.postId,achievement:2,adminId:'admin'});assert.equal((await profile()).level,2);assert.equal((await profile()).appearanceId,'student');
 await f.api('/api/account/seen',{level:999},cookie);assert.equal((await profile()).lastSeenLevel,2);
-await f.internal('/admin/challenges/posts/delete',{postId:firstData.postId,adminId:'admin'});assert.equal((await profile()).totalXp,0);assert.equal((await profile()).appearanceId,'baby');assert.ok(f.sql.exec('SELECT * FROM gudongi_audit').length>=4);
+await f.internal('/admin/challenges/posts/delete',{postId:firstData.postId,adminId:'admin',reason:'중복 등록된 기록'});assert.equal((await profile()).totalXp,0);assert.equal((await profile()).appearanceId,'baby');assert.ok(f.sql.exec('SELECT * FROM gudongi_audit').length>=4);
 
 const delivery=(id,count=1,userId='reader')=>f.internal('/gudongi/recommendation/deliver',{userId,requestId:id,fingerprint:'same-profile',profile:{jobs:['행정·기획']},result:{books:Array.from({length:count},(_,i)=>({title:`도서 ${i}`,isbn:`isbn-${id}-${i}`}))}});
 const empty=await (await delivery('empty-result',0)).json();assert.equal(empty.earnedXp,0);assert.equal(empty.quota.used,0);
@@ -45,7 +45,8 @@ const favorite=(id,saved=true,userCookie=cookie,userId='reader')=>f.api('/api/fa
 for(let i=0;i<6;i++){const response=await favorite(i),data=await response.json();assert.equal(response.status,200);assert.equal(data.earnedXp,i<5?1:0);assert.equal(data.quota.used,i+1);}
 assert.equal((await profile()).totalXp,5);assert.equal((await profile()).quota.used,6);assert.equal((await profile()).quota.xp,5);assert.equal((await profile()).level,2);
 const duplicate=await (await favorite(0)).json();assert.equal(duplicate.newlyAdded,false);assert.equal(duplicate.earnedXp,0);assert.equal(duplicate.quota.used,6);
-await favorite(0,false);const readded=await(await favorite(0)).json();assert.equal(readded.newlyAdded,true);assert.equal(readded.earnedXp,0);assert.equal(readded.quota.used,6);
+const removed=await(await favorite(0,false)).json();assert.equal(removed.removedXp,1);assert.equal(removed.gudongi.totalXp,4);assert.equal(removed.gudongi.level,1);const readded=await(await favorite(0)).json();assert.equal(readded.newlyAdded,true);assert.equal(readded.earnedXp,1);assert.equal(readded.gudongi.totalXp,5);assert.equal(readded.quota.used,6);
+const history=await(await f.api('/api/account/xp-history',null,cookie)).json();assert.equal(history.history.filter(item=>item.type==='library').length,5);assert.equal(history.history.some(item=>item.title==='서재 도서 0'&&item.context==='나의 서재'),true);
 for(let i=6;i<30;i++)assert.equal((await favorite(i)).status,200);
 assert.equal((await profile()).quota.used,30);assert.equal((await favorite(30)).status,429);assert.equal((await delivery('still-unlimited-after-shelf-limit',60)).status,200);
 const nextMidnight=Date.parse((await profile()).quota.resetAt);assert.equal(quota(f.sql,'reader',nextMidnight).used,0);assert.equal(quota(f.sql,'reader',nextMidnight).xp,0);

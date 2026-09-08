@@ -104,6 +104,12 @@ export function createChallengeSchema(sql){
       actor_id TEXT NOT NULL,action_name TEXT NOT NULL,window_started_at INTEGER NOT NULL,action_count INTEGER NOT NULL,
       PRIMARY KEY(actor_id,action_name)
     );
+    CREATE TABLE IF NOT EXISTS challenge_deletion_notifications (
+      notification_id TEXT PRIMARY KEY,user_id TEXT NOT NULL,post_title TEXT NOT NULL,board_name TEXT NOT NULL,
+      reason TEXT NOT NULL,removed_xp REAL NOT NULL DEFAULT 0,previous_level INTEGER NOT NULL,current_level INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,read_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS challenge_deletion_notice_user_idx ON challenge_deletion_notifications(user_id,read_at,created_at);
   `);
   const boardColumns=[...sql.exec('PRAGMA table_info(challenge_boards)')];
   if(!boardColumns.some(column=>column.name==='title_prompt'))sql.exec("ALTER TABLE challenge_boards ADD COLUMN title_prompt TEXT NOT NULL DEFAULT ''");
@@ -115,6 +121,7 @@ export function deleteChallengeAccountData(sql,userId){
   for(const postId of postIds)keys.push(...deletePostData(sql,postId));
   sql.exec('DELETE FROM challenge_comments WHERE author_id=?',userId);
   sql.exec('DELETE FROM challenge_rate_limits WHERE actor_id=?',userId);
+  sql.exec('DELETE FROM challenge_deletion_notifications WHERE user_id=?',userId);
   return keys;
 }
 
@@ -130,6 +137,14 @@ function handleChallengeStoreSync(sql,request,url){
   if(request.method==='GET'&&path==='/challenges/boards'){
     const includeArchived=url.searchParams.get('includeArchived')==='1',rows=[...sql.exec(`SELECT b.*,(SELECT COUNT(*) FROM challenge_posts p WHERE p.board_id=b.board_id) AS post_count FROM challenge_boards b ${includeArchived?'':"WHERE b.status<>'archived'"} ORDER BY CASE b.status WHEN 'archived' THEN 2 ELSE 1 END,b.start_date DESC,b.created_at DESC`)];
     return json({boards:rows.map(row=>({...boardDto(row),postCount:Number(row.post_count||0)}))});
+  }
+
+  if(request.method==='GET'&&path==='/challenges/deletion-notifications'){
+    const userId=id(url.searchParams.get('userId'));if(!userId)return json({error:'로그인이 필요합니다.'},401);const notices=[...sql.exec('SELECT * FROM challenge_deletion_notifications WHERE user_id=? AND read_at IS NULL ORDER BY created_at,notification_id LIMIT 20',userId)].map(item=>({id:item.notification_id,postTitle:item.post_title,boardName:item.board_name,reason:item.reason,removedXp:Number(item.removed_xp),previousLevel:Number(item.previous_level),currentLevel:Number(item.current_level),createdAt:Number(item.created_at)}));return json({notices});
+  }
+
+  if(request.method==='POST'&&path==='/challenges/deletion-notifications/read'){
+    const body=request.json(),userId=id(body.userId),notificationId=id(body.notificationId);if(!userId||!notificationId)return json({error:'알림 정보를 확인해 주세요.'},400);sql.exec('UPDATE challenge_deletion_notifications SET read_at=unixepoch() WHERE notification_id=? AND user_id=? AND read_at IS NULL',notificationId,userId);return json({ok:true});
   }
 
   if(request.method==='GET'&&path==='/challenges/posts'){
@@ -191,7 +206,7 @@ function handleChallengeStoreSync(sql,request,url){
   }
 
   if(request.method==='POST'&&path==='/admin/challenges/posts/delete'){
-    const body=request.json(),postId=id(body.postId),post=getPost(sql,postId);if(!post)return json({error:'게시글을 찾지 못했습니다.'},404);const keys=deletePostData(sql,postId),now=Math.floor(Date.now()/1000);sql.exec('INSERT INTO challenge_audit_logs(admin_id,target_type,target_id,action_name,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?)',id(body.adminId)||'admin','post',postId,'delete',JSON.stringify(postDto(post)),'',now);return json({ok:true,attachmentKeys:keys});
+    const body=request.json(),postId=id(body.postId),rawReason=String(body.reason??'').trim();if(!rawReason)return json({error:'삭제 사유를 입력해 주세요.'},400);if(rawReason.length>500)return json({error:'삭제 사유는 500자까지 입력할 수 있습니다.'},400);const reason=text(rawReason,500),post=getPost(sql,postId);if(!post)return json({error:'게시글을 찾지 못했습니다.'},404);const board=getBoard(sql,post.board_id),before=gudongiProfile(sql,post.author_id),keys=deletePostData(sql,postId),after=gudongiProfile(sql,post.author_id),removedXp=Math.max(0,before.totalXp-after.totalXp),now=Math.floor(Date.now()/1000),notificationId=crypto.randomUUID();sql.exec('INSERT INTO challenge_deletion_notifications(notification_id,user_id,post_title,board_name,reason,removed_xp,previous_level,current_level,created_at) VALUES(?,?,?,?,?,?,?,?,?)',notificationId,post.author_id,post.title,board?.name||'챌린지',reason,removedXp,before.level,after.level,now);sql.exec('INSERT INTO challenge_audit_logs(admin_id,target_type,target_id,action_name,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?)',id(body.adminId)||'admin','post',postId,'delete',JSON.stringify(postDto(post)),JSON.stringify({reason,removedXp,previousLevel:before.level,currentLevel:after.level,notificationId}),now);return json({ok:true,attachmentKeys:keys,removedXp,previousLevel:before.level,currentLevel:after.level,gudongi:after});
   }
 
   if(request.method==='POST'&&path==='/admin/challenges/comments/delete'){

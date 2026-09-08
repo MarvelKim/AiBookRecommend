@@ -223,7 +223,7 @@ assert.equal((await worker.fetch(new Request('https://gmuc.test/api/challenges/r
 assert.equal(r2.objects.size, 11);
 
 const adminDeletePost = await worker.fetch(new Request('https://gmuc.test/api/admin/challenges/posts/delete', {
-  method: 'POST', headers: { 'content-type': 'application/json', cookie: adminCookie }, body: JSON.stringify({ postId: uploadResult.postId }),
+  method: 'POST', headers: { 'content-type': 'application/json', cookie: adminCookie }, body: JSON.stringify({ postId: uploadResult.postId, reason: '첨부파일 등록 오류' }),
 }), env, {});
 assert.equal(adminDeletePost.status, 200);
 assert.equal(r2.objects.size, 10);
@@ -275,7 +275,7 @@ assert.deepEqual(crossYearStats.months, ['2026-12', '2027-01', '2027-02']);
 assert.equal(crossYearStats.participants[0].rate, null);
 
 const deletePagePost = await internal('/admin/challenges/posts/delete', {
-  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ postId: 'page-1', adminId: 'admin' }),
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ postId: 'page-1', adminId: 'admin', reason: '페이지 삭제 테스트' }),
 });
 assert.equal(deletePagePost.status, 200);
 const afterDeletePage = await (await internal('/challenges/posts?boardId=reading-2026&page=1&query=page-user-1')).json();
