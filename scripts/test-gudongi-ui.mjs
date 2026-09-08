@@ -15,6 +15,12 @@ try{
   const shot=async name=>{const r=await command('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(path.join(output,name+'.png'),Buffer.from(r.data,'base64'));};
   await command('Runtime.enable');await command('Page.enable');await delay(1200);
   await evaluate(`(async()=>{await fetch('/api/account/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id:'preview-reader',password:'test-password'})});state.user='preview-reader';state.isAdmin=false;updateUserUI();await showView('library');await window.refreshMyInfo();document.querySelector('#myGudongiTab').click();})()`);await delay(350);
+  for(const file of ['baby','student','default','reading','jumping','safety-helmet','hearts','suit']){
+    const bounds=await evaluate(`(async()=>{const img=document.querySelector('.header-gudongi-art img');img.src='/characters/gudongi/${file}.png';await img.decode();const a=img.getBoundingClientRect(),b=img.parentElement.getBoundingClientRect(),badge=document.querySelector('#headerGudongi').getBoundingClientRect();return {contained:a.left>=b.left&&a.right<=b.right&&a.top>=b.top&&a.bottom<=b.bottom,centerX:Math.abs((a.left+a.right-b.left-b.right)/2),centerY:Math.abs((a.top+a.bottom-b.top-b.bottom)/2),clip:{x:badge.x,y:badge.y,width:badge.width,height:badge.height,scale:3}}})()`);
+    assert.equal(bounds.contained,true,`${file} badge image must not be clipped`);assert.ok(bounds.centerX<.1&&bounds.centerY<.1,`${file} image centered`);
+    const capture=await command('Page.captureScreenshot',{format:'png',clip:bounds.clip});await writeFile(path.join(output,`badge-${file}.png`),Buffer.from(capture.data,'base64'));
+  }
+  await evaluate(`window.refreshMyInfo()`);
   for(const [name,width,height] of [['desktop',1440,1050],['tablet',820,1100],['mobile',390,844]]){
     await command('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<600});await evaluate(`window.scrollTo({top:0,behavior:'instant'})`);await delay(180);
     const geometry=await evaluate(`(()=>{const card=document.querySelector('.gudongi-growth-card').getBoundingClientRect(),rail=document.querySelector('.resource-index').getBoundingClientRect();return {overflow:document.documentElement.scrollWidth>innerWidth,cardRight:card.right,railLeft:rail.left,tab:document.querySelector('#myGudongiTab').getAttribute('aria-selected'),images:[...document.querySelectorAll('#myGudongiPanel img')].every(i=>i.complete&&i.naturalWidth>0)};})()`);
