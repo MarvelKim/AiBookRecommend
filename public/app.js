@@ -240,6 +240,8 @@ async function recommend(){
     state.books=live;recommendationRetry=null;window.applyGudongi?.(data.gudongi);window.renderRecommendationQuota?.(data.quota);
     if(!member)toast('로그인하면 추천 활동으로 구동이를 키울 수 있어요.');
     else if(data.earnedXp&&!data.replayed)toast('추천 완료! 구동이가 +1 EXP 자랐어요.');
+    else if(live.length&&data.replayed)toast('이미 받은 추천 결과를 다시 표시했어요. 경험치는 중복 적립되지 않아요.');
+    else if(live.length&&data.quota?.remainingXp===0)toast('오늘 추천 경험치 (4/4)를 모두 받았어요. 한국 시간 자정에 다시 적립할 수 있어요.');
     if(!live.length)toast('선택 조건에 맞는 결과가 없어요. 추천 사용량과 EXP는 변하지 않았습니다.');
     hasRecommended=true;state.offset=0;$('#results').hidden=false;renderBooks();$('#results').scrollIntoView({behavior:'smooth'});
   }catch(error){toast(error.message||'추천을 불러오지 못했어요. 같은 조건으로 다시 시도해 주세요.');if(error.status&&error.status<500)recommendationRetry=null;}

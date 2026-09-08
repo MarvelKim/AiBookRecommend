@@ -60,10 +60,10 @@ assert.equal((await f.api('/api/account/avatar',{avatar:''},cookie)).status,200)
 // Fresh legacy fixture: backfill adds only new ledger rows, leaves all original rows exact.
 const legacy=fixture();await legacy.login('legacy-reader');await legacy.board();
 legacy.sql.exec("DELETE FROM gudongi_migrations WHERE version='v1'"); // Memory-only simulated pre-migration state.
-for(let i=0;i<7;i++)legacy.sql.exec('INSERT INTO recommendation_sessions(user_id,book_count,profile_json,created_at) VALUES(?,?,?,?)','legacy-reader',i===6?0:6,'{}',Date.parse('2026-09-06T15:00:00Z')/1000+i);
+for(let i=0;i<7;i++)legacy.sql.exec('INSERT INTO recommendation_sessions(user_id,book_count,profile_json,created_at) VALUES(?,?,?,?)','legacy-reader',i===6?0:6,'{}',Date.parse(`${seoulDay()}T00:00:00+09:00`)/1000+i);
 legacy.sql.exec('INSERT INTO challenge_posts VALUES(?,?,?,?,?,?,?,?)','legacy-post','test-board','legacy-reader','과거 기록','그대로 보존',2.25,1,1);
 const snapshot=()=>Object.fromEntries(['accounts','recommendation_sessions','challenge_posts','favorites','user_registry'].map(t=>[t,legacy.sql.exec(`SELECT * FROM ${t}`)]));
-const before=snapshot();legacy.storage.transactionSync(()=>createGudongiSchema(legacy.sql));legacy.storage.transactionSync(()=>createGudongiSchema(legacy.sql));assert.deepEqual(snapshot(),before);assert.equal(gudongiProfile(legacy.sql,'legacy-reader').totalXp,10.75);assert.equal(quota(legacy.sql,'legacy-reader').used,0);
+const before=snapshot();legacy.storage.transactionSync(()=>createGudongiSchema(legacy.sql));legacy.storage.transactionSync(()=>createGudongiSchema(legacy.sql));assert.deepEqual(snapshot(),before);assert.equal(gudongiProfile(legacy.sql,'legacy-reader').totalXp,10.75);assert.equal(quota(legacy.sql,'legacy-reader').used,0);assert.equal(quota(legacy.sql,'legacy-reader').xp,4);assert.equal(quota(legacy.sql,'legacy-reader').remainingXp,0);
 
 // Attachment failure cannot leave a post or XP; retried uploads don't leave orphan objects.
 const attachmentForm=makePost('attachments-request',1);attachmentForm.append('files',new Blob([new Uint8Array([137,80,78,71,13,10,26,10,0])],{type:'image/png'}),'sample.png');

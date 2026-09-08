@@ -384,3 +384,5 @@ dialog{border:1px solid rgba(224,228,241,.9);border-radius:22px;box-shadow:0 36p
 
 .my-close::before,.my-close::after{content:"";position:absolute;left:50%;top:50%;width:18px;height:1.5px;background:currentColor;border-radius:2px;transform:translate(-50%,-50%) rotate(45deg);pointer-events:none}
 .my-close::after{transform:translate(-50%,-50%) rotate(-45deg)}
+
+.gudongi-daily{grid-column:1/-1;padding:22px 24px;border:1px solid var(--gudongi-line);border-radius:20px;background:#fff}.gudongi-daily h3{font-size:15px;margin:0 0 14px}.gudongi-daily>div{display:flex;justify-content:space-between;gap:12px;margin:10px 0;font-size:13px}.gudongi-daily b{color:#6270cb}.gudongi-daily p{font-size:11px;line-height:1.8;color:var(--gudongi-muted);margin:14px 0 0}
