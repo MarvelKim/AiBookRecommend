@@ -401,3 +401,14 @@ dialog{border:1px solid rgba(224,228,241,.9);border-radius:22px;box-shadow:0 36p
 .xp-segments{gap:7px}.xp-group{display:flex;gap:2px;flex:1;min-width:0}.xp-segments .xp-unit{min-width:0;height:14px;border-radius:2px;background:linear-gradient(to right,#7182e3 var(--xp-fill),#e4e8f4 var(--xp-fill))}.xp-segments .xp-unit.filled{background:#7182e3}
 @media(max-width:580px){.gudongi-daily{padding:22px 18px}.daily-heading{align-items:flex-start}.daily-heading h3{font-size:18px}.daily-heading>span{font-size:9px;padding:6px 8px}.daily-overview{grid-template-columns:1fr;gap:9px;margin-top:18px}.daily-xp,.daily-books{padding:14px 15px}.daily-xp strong,.daily-books strong{font-size:25px}.daily-xp em,.daily-books em{right:14px;bottom:16px}.daily-stamps{gap:7px}.daily-stamps>span{height:43px}.xp-segments{gap:5px}.xp-group{gap:1px}}
 .favorite-button:disabled{opacity:.55;cursor:wait}
+
+/* Deleted EXP entries stay visible without behaving like live navigation targets. */
+.xp-history-list>button.deleted{cursor:default}
+.xp-history-list>button.deleted:hover{border-color:#e1e6f4;background:#fff}
+.xp-history-list>button.deleted b{color:#6e7890}
+.xp-history-list>button.deleted b s{text-decoration-thickness:1px}
+.xp-history-list>button.deleted small{color:#8993aa}
+
+/* Keep the contact line visually secondary to the footer links and slogan. */
+.footer-info span{font-size:13px}
+@media(max-width:620px){.footer-info span{font-size:10px}}

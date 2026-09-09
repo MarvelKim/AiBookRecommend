@@ -30,12 +30,19 @@ export function createGudongiSchema(sql){
     CREATE INDEX IF NOT EXISTS gudongi_library_additions_day ON gudongi_library_additions(user_id,earned_date);
     CREATE TABLE IF NOT EXISTS gudongi_migrations(version TEXT PRIMARY KEY,created_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS gudongi_audit(audit_id INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT NOT NULL,source_id TEXT NOT NULL,action TEXT NOT NULL,before_value TEXT NOT NULL,after_value TEXT NOT NULL,created_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS gudongi_xp_deletions(source_type TEXT NOT NULL,source_id TEXT NOT NULL,user_id TEXT NOT NULL,title TEXT NOT NULL DEFAULT '',context TEXT NOT NULL DEFAULT '',original_xp REAL NOT NULL DEFAULT 0,original_created_at INTEGER NOT NULL,deleted_at INTEGER NOT NULL,PRIMARY KEY(source_type,source_id));
+    CREATE INDEX IF NOT EXISTS gudongi_xp_deletions_user ON gudongi_xp_deletions(user_id,original_created_at DESC);
     CREATE TRIGGER IF NOT EXISTS gudongi_challenge_insert AFTER INSERT ON challenge_posts BEGIN
       INSERT INTO gudongi_xp VALUES('challenge',NEW.post_id,NEW.author_id,NEW.achievement*3,date(NEW.created_at,'unixepoch','+9 hours'),NEW.created_at);
     END;
     CREATE TRIGGER IF NOT EXISTS gudongi_challenge_update AFTER UPDATE OF achievement ON challenge_posts BEGIN
       INSERT INTO gudongi_audit(user_id,source_id,action,before_value,after_value,created_at) VALUES(NEW.author_id,NEW.post_id,'challenge_xp_update',CAST(OLD.achievement*3 AS TEXT),CAST(NEW.achievement*3 AS TEXT),unixepoch());
       UPDATE gudongi_xp SET xp_amount=NEW.achievement*3 WHERE source_type='challenge' AND source_id=NEW.post_id;
+    END;
+    CREATE TRIGGER IF NOT EXISTS gudongi_challenge_delete_history BEFORE DELETE ON challenge_posts BEGIN
+      INSERT OR REPLACE INTO gudongi_xp_deletions(source_type,source_id,user_id,title,context,original_xp,original_created_at,deleted_at)
+      SELECT 'challenge',OLD.post_id,OLD.author_id,OLD.title,COALESCE((SELECT name FROM challenge_boards WHERE board_id=OLD.board_id),'챌린지'),x.xp_amount,x.created_at,unixepoch()
+      FROM gudongi_xp x WHERE x.source_type='challenge' AND x.source_id=OLD.post_id;
     END;
     CREATE TRIGGER IF NOT EXISTS gudongi_challenge_delete AFTER DELETE ON challenge_posts BEGIN
       INSERT INTO gudongi_audit(user_id,source_id,action,before_value,after_value,created_at) VALUES(OLD.author_id,OLD.post_id,'challenge_xp_remove',CAST(OLD.achievement*3 AS TEXT),'0',unixepoch());
@@ -46,9 +53,13 @@ export function createGudongiSchema(sql){
       DELETE FROM gudongi_xp WHERE user_id=OLD.user_id;
       DELETE FROM gudongi_deliveries WHERE user_id=OLD.user_id;
       DELETE FROM gudongi_audit WHERE user_id=OLD.user_id;
+      DELETE FROM gudongi_xp_deletions WHERE user_id=OLD.user_id;
     END;
     CREATE TRIGGER IF NOT EXISTS gudongi_account_delete_library_v2 AFTER DELETE ON accounts BEGIN
       DELETE FROM gudongi_library_additions WHERE user_id=OLD.user_id;
+    END;
+    CREATE TRIGGER IF NOT EXISTS gudongi_account_delete_xp_deletions_v3 AFTER DELETE ON accounts BEGIN
+      DELETE FROM gudongi_xp_deletions WHERE user_id=OLD.user_id;
     END;
   `);
   const additionColumns=[...sql.exec('PRAGMA table_info(gudongi_library_additions)')];
@@ -56,6 +67,19 @@ export function createGudongiSchema(sql){
   if(!additionColumns.some(column=>column.name==='xp_awarded'))sql.exec("ALTER TABLE gudongi_library_additions ADD COLUMN xp_awarded INTEGER NOT NULL DEFAULT 0");
   sql.exec("UPDATE gudongi_library_additions SET xp_awarded=1 WHERE xp_awarded=0 AND EXISTS(SELECT 1 FROM gudongi_xp x WHERE x.source_type='library' AND x.source_id='library:'||gudongi_library_additions.user_id||':'||gudongi_library_additions.earned_date||':'||gudongi_library_additions.book_key)");
   sql.exec("UPDATE gudongi_library_additions SET book_title=COALESCE((SELECT f.title FROM favorites f WHERE f.user_id='account:'||gudongi_library_additions.user_id AND f.book_key=gudongi_library_additions.book_key LIMIT 1),'') WHERE book_title=''");
+  sql.exec(`INSERT OR IGNORE INTO gudongi_xp_deletions(source_type,source_id,user_id,title,context,original_xp,original_created_at,deleted_at)
+    SELECT 'library',audit.source_id,audit.user_id,COALESCE(NULLIF(addition.book_title,''),'추천한 책 또는 논문'),'나의 서재',CAST(audit.before_value AS REAL),COALESCE(addition.created_at,audit.created_at),audit.created_at
+    FROM gudongi_audit audit
+    LEFT JOIN gudongi_library_additions addition ON addition.user_id=audit.user_id AND audit.source_id='library:'||addition.user_id||':'||addition.earned_date||':'||addition.book_key
+    WHERE audit.action='library_xp_remove' AND NOT EXISTS(SELECT 1 FROM gudongi_xp active WHERE active.source_type='library' AND active.source_id=audit.source_id)`);
+  for(const audit of sql.exec("SELECT target_id,before_json,after_json,created_at FROM challenge_audit_logs WHERE target_type='post' AND action_name='delete'")){
+    try{
+      const before=JSON.parse(audit.before_json||'{}'),after=JSON.parse(audit.after_json||'{}');
+      if(!before.authorId||!before.title)continue;
+      const notice=after.notificationId&&row(sql,'SELECT board_name FROM challenge_deletion_notifications WHERE notification_id=?',after.notificationId);
+      sql.exec("INSERT OR IGNORE INTO gudongi_xp_deletions(source_type,source_id,user_id,title,context,original_xp,original_created_at,deleted_at) VALUES('challenge',?,?,?,?,?,?,?)",audit.target_id,before.authorId,before.title,notice?.board_name||'챌린지',Number(after.removedXp??Number(before.achievement||0)*3),Number(before.createdAt||audit.created_at),Number(audit.created_at));
+    }catch{}
+  }
   // One-time, idempotent backfill. Historical books do NOT consume the new quota.
   if(!row(sql,"SELECT version FROM gudongi_migrations WHERE version='v1'")){
     sql.exec("INSERT OR IGNORE INTO gudongi_xp SELECT 'challenge',post_id,author_id,achievement*3,date(created_at,'unixepoch','+9 hours'),created_at FROM challenge_posts");
@@ -71,7 +95,7 @@ export function recordLibraryAddition(sql,userId,bookKey,bookTitle='',now=Date.n
   const q=quota(sql,userId,now),existing=row(sql,'SELECT * FROM gudongi_library_additions WHERE user_id=? AND earned_date=? AND book_key=?',userId,q.day,bookKey);
   if(existing){
     const sourceId=`library:${userId}:${q.day}:${bookKey}`,active=row(sql,"SELECT 1 AS found FROM gudongi_xp WHERE source_type='library' AND source_id=?",sourceId),earnedXp=Number(existing.xp_awarded)&&!active&&q.remainingXp>0?1:0;
-    if(earnedXp){sql.exec("INSERT INTO gudongi_xp VALUES('library',?,?,1,?,?)",sourceId,userId,q.day,existing.created_at);sql.exec('INSERT INTO gudongi_audit(user_id,source_id,action,before_value,after_value,created_at) VALUES(?,?,?,?,?,unixepoch())',userId,sourceId,'library_xp_restore','0','1');}
+    if(earnedXp){sql.exec("INSERT INTO gudongi_xp VALUES('library',?,?,1,?,?)",sourceId,userId,q.day,existing.created_at);sql.exec("DELETE FROM gudongi_xp_deletions WHERE source_type='library' AND source_id=?",sourceId);sql.exec('INSERT INTO gudongi_audit(user_id,source_id,action,before_value,after_value,created_at) VALUES(?,?,?,?,?,unixepoch())',userId,sourceId,'library_xp_restore','0','1');}
     if(bookTitle&&!existing.book_title)sql.exec('UPDATE gudongi_library_additions SET book_title=? WHERE user_id=? AND earned_date=? AND book_key=?',String(bookTitle).slice(0,300),userId,q.day,bookKey);
     return {counted:false,earnedXp,gudongi:gudongiProfile(sql,userId),quota:quota(sql,userId,now)};
   }
@@ -83,18 +107,22 @@ export function recordLibraryAddition(sql,userId,bookKey,bookTitle='',now=Date.n
 }
 export function revokeLibraryXp(sql,userId,bookKey,now=Date.now()){
   const additions=[...sql.exec('SELECT earned_date FROM gudongi_library_additions WHERE user_id=? AND book_key=? AND xp_awarded=1',userId,bookKey)],sourceIds=additions.map(item=>`library:${userId}:${item.earned_date}:${bookKey}`);let removedXp=0;
-  for(const sourceId of sourceIds){const earned=row(sql,"SELECT xp_amount FROM gudongi_xp WHERE source_type='library' AND source_id=? AND user_id=?",sourceId,userId);if(!earned)continue;removedXp+=Number(earned.xp_amount||0);sql.exec("DELETE FROM gudongi_xp WHERE source_type='library' AND source_id=? AND user_id=?",sourceId,userId);sql.exec('INSERT INTO gudongi_audit(user_id,source_id,action,before_value,after_value,created_at) VALUES(?,?,?,?,?,unixepoch())',userId,sourceId,'library_xp_remove',String(earned.xp_amount),'0');}
+  for(const sourceId of sourceIds){const earned=row(sql,"SELECT x.xp_amount,x.created_at,a.book_title FROM gudongi_xp x LEFT JOIN gudongi_library_additions a ON a.user_id=x.user_id AND a.earned_date=x.earned_date AND x.source_id='library:'||a.user_id||':'||a.earned_date||':'||a.book_key WHERE x.source_type='library' AND x.source_id=? AND x.user_id=?",sourceId,userId);if(!earned)continue;removedXp+=Number(earned.xp_amount||0);sql.exec("INSERT OR REPLACE INTO gudongi_xp_deletions(source_type,source_id,user_id,title,context,original_xp,original_created_at,deleted_at) VALUES('library',?,?,?,'나의 서재',?,?,unixepoch())",sourceId,userId,String(earned.book_title||'추천한 책 또는 논문'),Number(earned.xp_amount||0),Number(earned.created_at));sql.exec("DELETE FROM gudongi_xp WHERE source_type='library' AND source_id=? AND user_id=?",sourceId,userId);sql.exec('INSERT INTO gudongi_audit(user_id,source_id,action,before_value,after_value,created_at) VALUES(?,?,?,?,?,unixepoch())',userId,sourceId,'library_xp_remove',String(earned.xp_amount),'0');}
   return {removedXp,gudongi:gudongiProfile(sql,userId),quota:quota(sql,userId,now)};
 }
 export function gudongiHistory(sql,userId){
-  const rows=[...sql.exec(`SELECT x.source_type,x.source_id,x.xp_amount,x.created_at,a.book_title,f.title AS favorite_title,p.title AS post_title,b.name AS board_name
+  const rows=[...sql.exec(`SELECT x.source_type,x.source_id,x.xp_amount,x.created_at,a.book_title,f.title AS favorite_title,p.title AS post_title,b.name AS board_name,0 AS deleted
     FROM gudongi_xp x
     LEFT JOIN gudongi_library_additions a ON x.source_type='library' AND a.user_id=x.user_id AND a.earned_date=x.earned_date AND x.source_id='library:'||a.user_id||':'||a.earned_date||':'||a.book_key
     LEFT JOIN favorites f ON a.book_key=f.book_key AND f.user_id='account:'||x.user_id
     LEFT JOIN challenge_posts p ON x.source_type='challenge' AND p.post_id=x.source_id
     LEFT JOIN challenge_boards b ON p.board_id=b.board_id
-    WHERE x.user_id=? ORDER BY x.created_at DESC,x.source_id DESC LIMIT 200`,userId)];
-  return rows.map(item=>({type:item.source_type==='challenge'?'challenge':'library',targetId:item.source_type==='challenge'?item.source_id:'',title:item.source_type==='challenge'?(item.post_title||'챌린지 기록'):(item.book_title||item.favorite_title||'과거 도서 추천'),context:item.source_type==='challenge'?(item.board_name||'챌린지'):'나의 서재',xp:Number(item.xp_amount),createdAt:Number(item.created_at)}));
+    WHERE x.user_id=?
+    UNION ALL
+    SELECT source_type,source_id,0 AS xp_amount,original_created_at AS created_at,'' AS book_title,'' AS favorite_title,title AS post_title,context AS board_name,1 AS deleted
+    FROM gudongi_xp_deletions WHERE user_id=?
+    ORDER BY created_at DESC,source_id DESC LIMIT 200`,userId,userId)];
+  return rows.map(item=>({type:item.source_type==='challenge'?'challenge':'library',targetId:item.source_type==='challenge'&&!item.deleted?item.source_id:'',title:item.source_type==='challenge'?(item.post_title||'챌린지 기록'):(item.deleted?item.post_title:(item.book_title||item.favorite_title||'추천한 책 또는 논문')),context:item.source_type==='challenge'?(item.board_name||'챌린지'):'나의 서재',xp:Number(item.xp_amount),createdAt:Number(item.created_at),deleted:Boolean(item.deleted)}));
 }
 export function gudongiProfile(sql,userId){
   sql.exec('INSERT OR IGNORE INTO gudongi_profiles(user_id) VALUES(?)',userId);
