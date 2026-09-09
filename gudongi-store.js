@@ -9,8 +9,10 @@ export const APPEARANCES = [
   {id:'suit',kind:'basic',name:'정장 구동이',level:5,image:'suit.png',scale:1},
   {id:'safety-helmet',kind:'bonus',name:'안전모 구동이',level:5,image:'safety-helmet.png',scale:1},
   {id:'hearts',kind:'bonus',name:'하트뿅뿅 구동이',level:5,image:'hearts.png',scale:1},
+  {id:'admin',kind:'admin',name:'관리자 구동이',level:5,image:'admin.png',scale:1,adminOnly:true},
 ];
 const thresholds=[0,5,15,45,95], defaults=['baby','student','default','casual','suit'];
+const ADMIN_USER_ID='admin',ADMIN_BASE_XP=95;
 const row=(sql,query,...args)=>[...sql.exec(query,...args)][0];
 const json=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
 export const seoulDay=(now=Date.now())=>new Date(now+9*3600000).toISOString().slice(0,10);
@@ -126,13 +128,13 @@ export function gudongiHistory(sql,userId){
 }
 export function gudongiProfile(sql,userId){
   sql.exec('INSERT OR IGNORE INTO gudongi_profiles(user_id) VALUES(?)',userId);
-  const saved=row(sql,'SELECT * FROM gudongi_profiles WHERE user_id=?',userId),g=growth(row(sql,'SELECT COALESCE(SUM(xp_amount),0) AS total FROM gudongi_xp WHERE user_id=?',userId).total),selected=APPEARANCES.find(item=>item.id===saved.appearance_id);
+  const isAdmin=userId===ADMIN_USER_ID,available=APPEARANCES.filter(item=>isAdmin||!item.adminOnly),saved=row(sql,'SELECT * FROM gudongi_profiles WHERE user_id=?',userId),earnedXp=Number(row(sql,'SELECT COALESCE(SUM(xp_amount),0) AS total FROM gudongi_xp WHERE user_id=?',userId).total),g=growth(earnedXp+(isAdmin?ADMIN_BASE_XP:0)),selected=available.find(item=>item.id===saved.appearance_id);
   let appearanceId=saved.appearance_id;
   if(g.level>saved.last_level||!selected||selected.level>g.level)appearanceId=defaults[g.level-1];
   if(appearanceId!==saved.appearance_id){sql.exec('INSERT INTO gudongi_audit(user_id,source_id,action,before_value,after_value,created_at) VALUES(?,?,?,?,?,unixepoch())',userId,'profile','appearance_auto',saved.appearance_id,appearanceId);}
   if(g.level<saved.last_level){sql.exec('UPDATE gudongi_profiles SET last_seen_level=MIN(last_seen_level,?) WHERE user_id=?',g.level,userId);saved.last_seen_level=Math.min(saved.last_seen_level,g.level);}
   sql.exec('UPDATE gudongi_profiles SET appearance_id=?,last_level=? WHERE user_id=?',appearanceId,g.level,userId);
-  return {...g,userId,appearanceId,appearance:APPEARANCES.find(item=>item.id===appearanceId),appearances:APPEARANCES.filter(item=>item.level<=g.level),appearanceCatalog:APPEARANCES.map(item=>({...item,unlocked:item.level<=g.level})),unlockedCount:APPEARANCES.filter(item=>item.level<=g.level).length,avatar:saved.avatar_data,lastSeenLevel:saved.last_seen_level,levelUp:g.level>saved.last_seen_level,quota:quota(sql,userId)};
+  return {...g,userId,isAdmin,appearanceId,appearance:available.find(item=>item.id===appearanceId),appearances:available.filter(item=>item.level<=g.level),appearanceCatalog:available.map(item=>({...item,unlocked:item.level<=g.level})),unlockedCount:available.filter(item=>item.level<=g.level).length,totalAppearanceCount:available.length,avatar:saved.avatar_data,lastSeenLevel:saved.last_seen_level,levelUp:!isAdmin&&g.level>saved.last_seen_level,quota:quota(sql,userId)};
 }
 export function recommendationLookup(sql,userId,requestId,fingerprint){
   const saved=row(sql,'SELECT * FROM gudongi_deliveries WHERE user_id=? AND request_id=?',userId,requestId);
@@ -153,7 +155,7 @@ export function deliverRecommendation(sql,body){
 export async function handleGudongiRequest(sql,request,transaction=fn=>fn()){
   const url=new URL(request.url);if(!url.pathname.startsWith('/gudongi/'))return null;
   const body=request.method==='POST'?await request.json():Object.fromEntries(url.searchParams),userId=String(body.userId||'');
-  if(!row(sql,'SELECT user_id FROM accounts WHERE user_id=?',userId))return json({error:'로그인이 필요합니다.'},401);
+  if(userId!==ADMIN_USER_ID&&!row(sql,'SELECT user_id FROM accounts WHERE user_id=?',userId))return json({error:'로그인이 필요합니다.'},401);
   return transaction(()=>{
     if(url.pathname==='/gudongi/profile')return json({gudongi:gudongiProfile(sql,userId)});
     if(url.pathname==='/gudongi/history')return json({history:gudongiHistory(sql,userId)});

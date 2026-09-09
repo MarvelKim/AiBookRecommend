@@ -412,3 +412,13 @@ dialog{border:1px solid rgba(224,228,241,.9);border-radius:22px;box-shadow:0 36p
 /* Keep the contact line visually secondary to the footer links and slogan. */
 .footer-info span{font-size:13px}
 @media(max-width:620px){.footer-info span{font-size:10px}}
+
+.admin-gudongi-open{margin-top:16px}
+.admin-avatar-status{display:block;margin-top:4px;color:#687bd1;font-size:9px;font-weight:800}
+.admin-avatar-dialog{position:relative;padding:32px;text-align:center}
+.admin-avatar-dialog h2{margin:4px 30px 18px;font-size:20px}
+.admin-avatar-preview{width:256px;height:256px;max-width:100%;margin:0 auto 18px;border-radius:50%;overflow:hidden;border:4px solid #fff;box-shadow:0 0 0 2px #d9e0f3,0 16px 35px #34446a24;background:#eef1f8}
+.admin-avatar-preview img{width:100%;height:100%;object-fit:cover}
+.admin-avatar-dialog>p:not(.eyebrow):not(.form-error){color:#68758e;font-size:11px;line-height:1.7}
+.admin-avatar-dialog .delete-confirm{width:100%;margin-top:10px}
+.appearance-choice.is-admin{border-color:#e5bf62;background:linear-gradient(145deg,#fffdf5,#fff8df)}

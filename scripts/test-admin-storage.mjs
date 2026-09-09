@@ -131,6 +131,16 @@ assert.equal(users.users[0].isAdmin, true);
 assert.deepEqual(new Set(users.users.map((user) => user.userId)), new Set(['admin', 'legacy-user', 'server-user', 'odd id!@#']));
 assert.equal(users.users.find((user) => user.userId === 'legacy-user').recommendedBookCount, 1);
 
+sql.exec("INSERT OR IGNORE INTO gudongi_profiles(user_id) VALUES('legacy-user')");
+sql.exec("UPDATE gudongi_profiles SET avatar_data='data:image/jpeg;base64,test' WHERE user_id='legacy-user'");
+const usersWithAvatar = await (await store.fetch(new Request('https://rankings.internal/admin/users'))).json();
+assert.equal(usersWithAvatar.users.find((user) => user.userId === 'legacy-user').hasAvatar, true);
+const avatarPreview = await (await store.fetch(new Request('https://rankings.internal/admin/users/avatar?userId=legacy-user'))).json();
+assert.equal(avatarPreview.hasAvatar, true);
+const avatarDeleteResponse = await store.fetch(new Request('https://rankings.internal/admin/users/avatar/delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ userId: 'legacy-user' }) }));
+assert.equal(avatarDeleteResponse.status, 200);
+assert.equal((await (await store.fetch(new Request('https://rankings.internal/admin/users/avatar?userId=legacy-user'))).json()).hasAvatar, false);
+
 const filteredUsersResponse = await store.fetch(new Request('https://rankings.internal/admin/users?query=no-match'));
 const filteredUsers = await filteredUsersResponse.json();
 assert.deepEqual(filteredUsers.users.map((user) => user.userId), ['admin']);

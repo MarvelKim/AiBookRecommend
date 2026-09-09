@@ -16,11 +16,16 @@ assert.equal((await profile()).appearanceCatalog.length,9);
 assert.deepEqual((await profile()).appearanceCatalog.filter(a=>a.unlocked).map(a=>a.id),['baby']);
 assert.equal((await profile()).appearanceCatalog.find(a=>a.id==='hearts').kind,'bonus');
 assert.equal((await profile()).appearanceCatalog.find(a=>a.id==='suit').kind,'basic');
+assert.equal((await f.api('/api/account/appearance',{appearanceId:'admin'},cookie)).status,403);
+let adminProfile=gudongiProfile(f.sql,'admin');assert.equal(adminProfile.totalXp,95);assert.equal(adminProfile.currentXp,50);assert.equal(adminProfile.requiredXp,50);assert.equal(adminProfile.max,true);assert.equal(adminProfile.unlockedCount,10);assert.equal(adminProfile.appearanceCatalog.every(a=>a.unlocked),true);assert.equal(adminProfile.appearanceCatalog.find(a=>a.id==='admin').adminOnly,true);
+assert.equal((await f.internal('/gudongi/appearance',{userId:'admin',appearanceId:'admin'})).status,200);adminProfile=gudongiProfile(f.sql,'admin');assert.equal(adminProfile.appearanceId,'admin');
+const adminFavorite=await(await f.internal('/favorite',{userId:'account:admin',saved:true,book:{title:'관리자 추천 도서',isbn:'admin-shelf-1'}})).json();assert.equal(adminFavorite.earnedXp,1);assert.equal(adminFavorite.gudongi.currentXp,51);
+const adminPost=await(await f.internal('/challenges/posts',{postId:'admin-growth-post',boardId:'test-board',authorId:'admin',title:'관리자 확인 기록',body:'관리자 구동이 경험치 확인용 기록입니다.',achievement:2/3,attachments:[]})).json();assert.ok(Math.abs(adminPost.gudongi.currentXp-53)<1e-9);assert.equal(adminPost.gudongi.requiredXp,50);assert.equal(adminPost.gudongi.appearanceId,'admin');
 
 const makePost=(requestId,amount)=>{const form=new FormData();form.set('requestId',requestId);form.set('title','테스트 도서 기록');form.set('body','함께 읽고 성장합니다.');form.set('achievement',String(amount));return form;};
 const first=await f.api('/api/challenges/test-board/posts',makePost('challenge-request-1',.5),cookie),firstData=await first.json();assert.equal(first.status,201);assert.equal(firstData.earnedXp,1.5);assert.equal(firstData.gudongi.totalXp,1.5);
 const duplicates=await Promise.all(Array.from({length:6},()=>f.api('/api/challenges/test-board/posts',makePost('challenge-request-1',.5),cookie)));
-for(const response of duplicates){assert.equal(response.status,200);assert.equal((await response.json()).replayed,true);}assert.equal((await profile()).totalXp,1.5);assert.equal(f.sql.exec('SELECT COUNT(*) n FROM challenge_posts')[0].n,1);
+for(const response of duplicates){assert.equal(response.status,200);assert.equal((await response.json()).replayed,true);}assert.equal((await profile()).totalXp,1.5);assert.equal(f.sql.exec("SELECT COUNT(*) n FROM challenge_posts WHERE author_id='reader'")[0].n,1);
 assert.equal((await f.api('/api/challenges/test-board/posts',makePost('challenge-request-1',50),cookie)).status,409);
 await f.internal('/admin/challenges/posts/progress',{postId:firstData.postId,achievement:40,adminId:'admin'});assert.equal((await profile()).totalXp,120);assert.equal((await profile()).level,5);assert.equal((await profile()).appearanceId,'suit');assert.equal((await profile()).appearance.image,'suit.png');assert.equal((await profile()).currentXp,75);assert.equal((await profile()).requiredXp,50);
 assert.equal((await profile()).appearanceCatalog.every(a=>a.unlocked),true);

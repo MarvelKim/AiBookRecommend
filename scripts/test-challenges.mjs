@@ -81,6 +81,20 @@ assert.equal((await internal('/admin/settings/access-verify', {
   body: JSON.stringify({ email: 'admin@gmuc.or.kr', verificationVersion: 'challenge-test-v1', mode: 'initial' }),
 })).status, 200);
 assert.equal((await worker.fetch(new Request('https://gmuc.test/api/admin/challenges/boards', { headers: { cookie: adminCookie } }), env, {})).status, 200);
+const adminGudongi = await (await worker.fetch(new Request('https://gmuc.test/api/account/gudongi', { headers: { cookie: adminCookie } }), env, {})).json();
+assert.equal(adminGudongi.gudongi.currentXp, 50);
+assert.equal(adminGudongi.gudongi.requiredXp, 50);
+assert.equal(adminGudongi.gudongi.unlockedCount, 10);
+const adminFavoriteResponse = await worker.fetch(new Request('https://gmuc.test/api/favorite', { method: 'POST', headers: { 'content-type': 'application/json', cookie: adminCookie, origin: 'https://gmuc.test' }, body: JSON.stringify({ userId: 'account:admin', saved: true, book: { title: '관리자 API 추천', isbn: 'admin-api-book' } }) }), env, {});
+assert.equal((await adminFavoriteResponse.json()).gudongi.currentXp, 51);
+const adminGrowthForm = new FormData();adminGrowthForm.set('requestId','admin-growth-api');adminGrowthForm.set('title','관리자 API 기록');adminGrowthForm.set('body','관리자 계정 글쓰기 경험치 확인입니다.');adminGrowthForm.set('achievement',String(2/3));
+const adminGrowthResponse = await worker.fetch(new Request('https://gmuc.test/api/challenges/reading-2026/posts', { method: 'POST', headers: { cookie: adminCookie, origin: 'https://gmuc.test' }, body: adminGrowthForm }), env, {});
+const adminGrowth = await adminGrowthResponse.json();assert.equal(adminGrowthResponse.status,201);assert.ok(Math.abs(adminGrowth.gudongi.currentXp-53)<1e-9);assert.equal(adminGrowth.gudongi.requiredXp,50);
+sql.exec("INSERT INTO user_registry(user_id,created_at,last_seen_at) VALUES('avatar-user',unixepoch(),unixepoch())");sql.exec("INSERT INTO gudongi_profiles(user_id,avatar_data) VALUES('avatar-user','data:image/jpeg;base64,test')");
+const adminUsers = await (await worker.fetch(new Request('https://gmuc.test/api/admin/users', { headers: { cookie: adminCookie } }), env, {})).json();assert.equal(adminUsers.users.find(user=>user.userId==='avatar-user').hasAvatar,true);
+const avatarData = await (await worker.fetch(new Request('https://gmuc.test/api/admin/users/avatar?userId=avatar-user', { headers: { cookie: adminCookie } }), env, {})).json();assert.equal(avatarData.hasAvatar,true);
+assert.equal((await worker.fetch(new Request('https://gmuc.test/api/admin/users/avatar/delete', { method:'POST',headers:{'content-type':'application/json',cookie:adminCookie,origin:'https://gmuc.test'},body:JSON.stringify({userId:'avatar-user'})}),env,{})).status,200);
+assert.equal(sql.exec("SELECT avatar_data FROM gudongi_profiles WHERE user_id='avatar-user'")[0].avatar_data,'');
 
 await internal('/admin/challenges/boards/save', {
   method: 'POST', headers: { 'content-type': 'application/json' },

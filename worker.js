@@ -108,6 +108,7 @@ function managedUserId(value=''){const id=String(value).trim();return id&&id.len
 async function accountPasswordHash(userId,password,salt,env){return hmac(env.ADMIN_SESSION_SECRET,`account\0${userId}\0${salt}\0${password}`);}
 async function createUserToken(userId,env){const payload=bytesToBase64Url(textEncoder.encode(JSON.stringify({sub:userId,exp:Math.floor(Date.now()/1000)+USER_SESSION_SECONDS,nonce:crypto.randomUUID()}))),signature=await hmac(env.ADMIN_SESSION_SECRET,`user.${payload}`);return `${payload}.${signature}`;}
 async function userFromSession(request,env){if(!env.ADMIN_SESSION_SECRET)return '';try{const token=cookiesOf(request)[USER_COOKIE]||'',[payload,signature]=token.split('.');if(!payload||!signature||!constantTimeEqual(signature,await hmac(env.ADMIN_SESSION_SECRET,`user.${payload}`)))return '';const data=JSON.parse(new TextDecoder().decode(base64UrlToBytes(payload))),userId=Number(data.exp)>Math.floor(Date.now()/1000)?accountId(data.sub):'';if(!userId)return '';const response=await rankingStub(env).fetch(new Request(`https://rankings.internal/account/auth-info?userId=${encodeURIComponent(userId)}`)),info=await response.json();return info.exists?userId:'';}catch{return '';}}
+async function activityUserFromSession(request,env){return await validAdminSession(request,env)?ADMIN_ID:await userFromSession(request,env);}
 function userCookie(request,token,maxAge=USER_SESSION_SECONDS){const secure=new URL(request.url).protocol==='https:'?'; Secure':'';return `${USER_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;}
 function base64UrlJson(value){return JSON.parse(new TextDecoder().decode(base64UrlToBytes(value)));}
 async function verifyAccessJwt(request,env){
@@ -244,7 +245,18 @@ export class RankingStore {
 
     if(request.method==='GET'&&url.pathname==='/admin/users'){
       const query=String(url.searchParams.get('query')||'').trim().slice(0,120),like=`%${query}%`,knownUsers=`SELECT user_id FROM user_registry UNION SELECT user_id FROM accounts UNION SELECT substr(user_id,9) AS user_id FROM favorites WHERE user_id LIKE 'account:%' AND length(user_id)>8 UNION SELECT 'admin' AS user_id`,rows=[...this.sql.exec(`SELECT k.user_id,COALESCE(a.must_reset,0) AS must_reset,COALESCE(a.created_at,r.created_at,(SELECT MIN(f.created_at) FROM favorites f WHERE f.user_id='account:'||k.user_id),0) AS created_at,COALESCE(a.last_login_at,r.last_seen_at,(SELECT MAX(f.created_at) FROM favorites f WHERE f.user_id='account:'||k.user_id),0) AS last_login_at,COALESCE(a.last_recommended_at,0) AS last_recommended_at,(SELECT COUNT(*) FROM favorites f WHERE f.user_id='account:'||k.user_id) AS favorite_count FROM (${knownUsers}) k LEFT JOIN accounts a ON a.user_id=k.user_id LEFT JOIN user_registry r ON r.user_id=k.user_id WHERE k.user_id='admin' OR ?='' OR k.user_id LIKE ? ORDER BY CASE WHEN k.user_id='admin' THEN 0 ELSE 1 END,favorite_count DESC,last_login_at DESC LIMIT 200`,query,like)],summary=[...this.sql.exec(`SELECT COUNT(*) AS user_count,COALESCE(SUM((SELECT COUNT(*) FROM favorites f WHERE f.user_id='account:'||k.user_id)),0) AS book_count,(SELECT COUNT(DISTINCT book_key) FROM favorites WHERE user_id LIKE 'account:%') AS book_type_count FROM (${knownUsers}) k`)][0];
-      return json({users:rows.map(row=>({userId:row.user_id,isAdmin:row.user_id===ADMIN_ID,mustReset:Boolean(row.must_reset),recommendedBookCount:Number(row.favorite_count),favoriteCount:Number(row.favorite_count),createdAt:Number(row.created_at),lastLoginAt:Number(row.last_login_at),lastRecommendedAt:Number(row.last_recommended_at)})),summary:{userCount:Number(summary?.user_count||0),bookCount:Number(summary?.book_count||0),bookTypeCount:Number(summary?.book_type_count||0)}});
+      return json({users:rows.map(row=>({userId:row.user_id,isAdmin:row.user_id===ADMIN_ID,mustReset:Boolean(row.must_reset),hasAvatar:Boolean([...this.sql.exec("SELECT 1 AS found FROM gudongi_profiles WHERE user_id=? AND avatar_data<>'' LIMIT 1",row.user_id)][0]),recommendedBookCount:Number(row.favorite_count),favoriteCount:Number(row.favorite_count),createdAt:Number(row.created_at),lastLoginAt:Number(row.last_login_at),lastRecommendedAt:Number(row.last_recommended_at)})),summary:{userCount:Number(summary?.user_count||0),bookCount:Number(summary?.book_count||0),bookTypeCount:Number(summary?.book_type_count||0)}});
+    }
+
+    if(request.method==='GET'&&url.pathname==='/admin/users/avatar'){
+      const userId=managedUserId(url.searchParams.get('userId')),profile=userId&&[...this.sql.exec('SELECT avatar_data FROM gudongi_profiles WHERE user_id=? LIMIT 1',userId)][0];
+      if(!userId)return json({error:'사용자 ID를 확인해 주세요.'},400);return json({userId,avatar:profile?.avatar_data||'',hasAvatar:Boolean(profile?.avatar_data)});
+    }
+
+    if(request.method==='POST'&&url.pathname==='/admin/users/avatar/delete'){
+      const body=await request.json(),userId=managedUserId(body.userId),profile=userId&&[...this.sql.exec("SELECT avatar_data FROM gudongi_profiles WHERE user_id=? AND avatar_data<>'' LIMIT 1",userId)][0];
+      if(!userId)return json({error:'사용자 ID를 확인해 주세요.'},400);if(!profile)return json({error:'삭제할 프로필 사진이 없습니다.'},404);
+      return this.transaction(()=>{this.sql.exec("UPDATE gudongi_profiles SET avatar_data='' WHERE user_id=?",userId);this.sql.exec('INSERT INTO gudongi_audit(user_id,source_id,action,before_value,after_value,created_at) VALUES(?,?,?,?,?,unixepoch())',userId,'profile','admin_avatar_remove','set','');return json({ok:true,userId});});
     }
 
     if(request.method==='POST'&&url.pathname==='/admin/users/recommendations/reset'){
@@ -299,7 +311,7 @@ export class RankingStore {
       const body=await request.json(),userId=String(body.userId||'').slice(0,128),book=body.book||{},key=String(book.isbn||book.title||'').slice(0,200);
       if(!userId||!key||!book.title)return json({error:'필수 정보가 없습니다.'},400);
       return this.transaction(()=>{
-        const registryId=userId.startsWith('account:')?managedUserId(userId.slice(8)):'',member=registryId&&[...this.sql.exec('SELECT 1 AS found FROM accounts WHERE user_id=?',registryId)][0],existing=[...this.sql.exec('SELECT 1 AS found FROM favorites WHERE user_id=? AND book_key=?',userId,key)][0];
+        const registryId=userId.startsWith('account:')?managedUserId(userId.slice(8)):'',member=registryId&&(registryId===ADMIN_ID||[...this.sql.exec('SELECT 1 AS found FROM accounts WHERE user_id=?',registryId)][0]),existing=[...this.sql.exec('SELECT 1 AS found FROM favorites WHERE user_id=? AND book_key=?',userId,key)][0];
         if(registryId){const now=Math.floor(Date.now()/1000);this.sql.exec('INSERT INTO user_registry(user_id,created_at,last_seen_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET last_seen_at=excluded.last_seen_at',registryId,now,now);}
         let reward=null;
         if(body.saved&&!existing&&member){reward=recordLibraryAddition(this.sql,registryId,key,book.title);if(reward.limited)return json({error:'오늘은 나의 서재에 30권을 모두 추가했어요. 한국 시간 자정부터 다시 추가할 수 있어요.',code:'DAILY_LIBRARY_LIMIT',quota:reward.quota},429);}
@@ -351,11 +363,11 @@ async function challengeApi(request,env,url){
   const postDetailMatch=url.pathname.match(/^\/api\/challenges\/posts\/([\w-]+)$/);
   if(request.method==='GET'&&postDetailMatch)return challengeInternal(env,`/challenges/post?postId=${encodeURIComponent(postDetailMatch[1])}`);
   const commentMatch=url.pathname.match(/^\/api\/challenges\/posts\/([\w-]+)\/comments$/);
-  if(request.method==='POST'&&commentMatch){const userId=await userFromSession(request,env);if(!userId)return json({error:'댓글을 작성하려면 로그인해 주세요.'},401);const body=await request.json().catch(()=>({}));return challengeInternal(env,'/challenges/comments',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({postId:commentMatch[1],authorId:userId,body:body.body})});}
+  if(request.method==='POST'&&commentMatch){const userId=await activityUserFromSession(request,env);if(!userId)return json({error:'댓글을 작성하려면 로그인해 주세요.'},401);const body=await request.json().catch(()=>({}));return challengeInternal(env,'/challenges/comments',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({postId:commentMatch[1],authorId:userId,body:body.body})});}
   const postsMatch=url.pathname.match(/^\/api\/challenges\/([\w-]+)\/posts$/);
   if(postsMatch&&request.method==='GET'){const target=new URL('https://rankings.internal/challenges/posts');target.searchParams.set('boardId',postsMatch[1]);target.searchParams.set('page',url.searchParams.get('page')||'1');target.searchParams.set('query',url.searchParams.get('query')||'');return rankingStub(env).fetch(new Request(target));}
   if(postsMatch&&request.method==='POST'){
-    const userId=await userFromSession(request,env);if(!userId)return json({error:'게시글을 작성하려면 로그인해 주세요.'},401);if(!String(request.headers.get('content-type')||'').toLowerCase().includes('multipart/form-data'))return json({error:'게시글은 첨부 가능한 양식으로 전송해 주세요.'},415);
+    const userId=await activityUserFromSession(request,env);if(!userId)return json({error:'게시글을 작성하려면 로그인해 주세요.'},401);if(!String(request.headers.get('content-type')||'').toLowerCase().includes('multipart/form-data'))return json({error:'게시글은 첨부 가능한 양식으로 전송해 주세요.'},415);
     const form=await request.formData(),files=form.getAll('files').filter(file=>file&&typeof file.arrayBuffer==='function');if(files.length>10)return json({error:'첨부파일은 최대 10개까지 등록할 수 있습니다.'},400);const total=files.reduce((sum,file)=>sum+Number(file.size||0),0);if(total>CHALLENGE_TOTAL_LIMIT)return json({error:'첨부파일 전체 크기는 50MB를 넘을 수 없습니다.'},413);if(files.length&&!env.CHALLENGE_FILES)return json({error:'첨부파일 저장소가 아직 연결되지 않았습니다.'},503);
     const requestId=String(form.get('requestId')||crypto.randomUUID());if(!/^[\w-]{8,100}$/.test(requestId))return json({error:'요청 번호를 확인해 주세요.'},400);
     const postId=await sha256(`challenge:${userId}:${requestId}`),uploads=[],metadata=[];
@@ -386,7 +398,7 @@ async function accountApi(request,env,url){
   if(request.method==='GET'&&url.pathname==='/api/account/session'){const userId=await userFromSession(request,env);return userId?json({ok:true,userId}):json({error:'로그인이 필요합니다.'},401);}
   if(request.method==='POST'&&url.pathname==='/api/account/recommendations/log')return json({error:'추천 사용량은 서버가 실제 제공한 결과로만 기록합니다.'},410);
   if(['/api/account/gudongi','/api/account/xp-history','/api/account/challenge-deletion-notices','/api/account/challenge-deletion-notices/read','/api/account/appearance','/api/account/seen','/api/account/avatar','/api/account/password'].includes(url.pathname)){
-    const userId=await userFromSession(request,env);if(!userId)return json({error:'로그인이 필요합니다.'},401);
+    const userId=await activityUserFromSession(request,env);if(!userId)return json({error:'로그인이 필요합니다.'},401);
     if(url.pathname==='/api/account/gudongi'&&request.method==='GET')return challengeInternal(env,`/gudongi/profile?userId=${encodeURIComponent(userId)}`);
     if(url.pathname==='/api/account/xp-history'&&request.method==='GET')return challengeInternal(env,`/gudongi/history?userId=${encodeURIComponent(userId)}`);
     if(url.pathname==='/api/account/challenge-deletion-notices'&&request.method==='GET')return challengeInternal(env,`/challenges/deletion-notifications?userId=${encodeURIComponent(userId)}`);
@@ -469,10 +481,12 @@ async function adminApi(request,env,url,ctx){
     },internalPath=routeMap[url.pathname];if(!internalPath)return json({error:'Not found'},404);const response=await challengeInternal(env,internalPath,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)}),result=await response.json();if(response.ok&&result.attachmentKeys)await deleteChallengeObjects(env,result.attachmentKeys);return json(result,response.status);
   }
 
-  if(url.pathname.startsWith('/api/admin/users')){
+    if(url.pathname.startsWith('/api/admin/users')){
     const state=await getAdminState(env);if(!state.emailVerified)return json({error:'관리자 이메일 인증을 먼저 완료해 주세요.'},403);
-    if(request.method==='GET'&&url.pathname==='/api/admin/users'){const target=new URL('https://rankings.internal/admin/users');target.searchParams.set('query',url.searchParams.get('query')||'');return stub.fetch(new Request(target));}
-    const body=await request.json(),userId=managedUserId(body.userId);if(!userId)return json({error:'초기화할 사용자 ID를 확인해 주세요.'},400);
+      if(request.method==='GET'&&url.pathname==='/api/admin/users'){const target=new URL('https://rankings.internal/admin/users');target.searchParams.set('query',url.searchParams.get('query')||'');return stub.fetch(new Request(target));}
+      if(request.method==='GET'&&url.pathname==='/api/admin/users/avatar'){const target=new URL('https://rankings.internal/admin/users/avatar');target.searchParams.set('userId',managedUserId(url.searchParams.get('userId')));return stub.fetch(new Request(target));}
+      const body=await request.json(),userId=managedUserId(body.userId);if(!userId)return json({error:'초기화할 사용자 ID를 확인해 주세요.'},400);
+      if(request.method==='POST'&&url.pathname==='/api/admin/users/avatar/delete')return stub.fetch(new Request('https://rankings.internal/admin/users/avatar/delete',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId})}));
     if(request.method==='POST'&&url.pathname==='/api/admin/users/recommendations/reset')return stub.fetch(new Request('https://rankings.internal/admin/users/recommendations/reset',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId})}));
     if(request.method==='POST'&&url.pathname==='/api/admin/users/password/reset'){
       if(userId===ADMIN_ID)return json({error:'관리자 비밀번호는 Cloudflare 비밀값에서 관리됩니다.'},400);
@@ -516,7 +530,7 @@ export default {
         const input=await request.json(),profile={jobs:input.jobs,purposes:input.purposes,level:input.level,freshness:input.freshness,practical:input.practical};
         if(!Array.isArray(profile.jobs)||!profile.jobs.length||profile.jobs.length>12||!profile.jobs.every(x=>typeof x==='string'&&x.length<=60)||!Array.isArray(profile.purposes)||!profile.purposes.length||profile.purposes.length>12||!profile.purposes.every(x=>typeof x==='string'&&x.length<=60)||![profile.level,profile.freshness,profile.practical].every(x=>typeof x==='string'&&x.length<=60))return json({error:'추천 조건을 모두 선택해 주세요.'},400);
         if(profile.level===PAPER_LEVEL)profile.practical=PAPER_PRACTICAL;
-        const userId=await userFromSession(request,env),requestId=String(input.requestId||crypto.randomUUID()),fingerprint=await sha256(JSON.stringify(profile));
+        const userId=await activityUserFromSession(request,env),requestId=String(input.requestId||crypto.randomUUID()),fingerprint=await sha256(JSON.stringify(profile));
         if(!/^[\w-]{8,100}$/.test(requestId))return json({error:'요청 번호를 확인해 주세요.'},400);
         const internal=(path,body)=>challengeInternal(env,path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
         if(userId){const check=await internal('/gudongi/recommendation/check',{userId,requestId,fingerprint}),data=await check.clone().json();if(!data.available)return check;}
